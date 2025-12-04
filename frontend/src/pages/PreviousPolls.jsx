@@ -50,7 +50,7 @@ const PreviousPolls = () => {
   if (loading) return <Loading message="Loading previous polls..." />;
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-indigo-50 p-4">
+    <div className="min-h-screen bg-linear-to-br from-gray-50 to-indigo-50 p-4">
       <div className="max-w-4xl mx-auto">
         <div className="bg-white rounded-lg shadow-lg p-6">
           <div className="flex items-center justify-between mb-4">

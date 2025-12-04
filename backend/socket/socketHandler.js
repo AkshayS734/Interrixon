@@ -1,7 +1,11 @@
 import Poll from '../models/Poll.js';
+import Admin from '../models/Admin.js';
 import logger from '../utils/logger.js';
 import { createRateLimiter } from '../utils/rateLimiter.js';
 import mongoose from 'mongoose';
+import jwt from 'jsonwebtoken';
+
+const JWT_SECRET = process.env.JWT_SECRET;
 
 // Rate limiters for socket events
 const voteLimiter = createRateLimiter(10, 60); // 10 votes per minute
@@ -27,8 +31,30 @@ function buildPollQuery(id) {
 }
 
 export const handleSocketConnection = (io) => {
-  io.on('connection', (socket) => {
+  io.on('connection', async (socket) => {
     logger.info('Client connected', { socketId: socket.id });
+
+    // Try to verify JWT if provided in the handshake auth
+    try {
+      const token = socket.handshake?.auth?.token;
+      if (token) {
+        const decoded = jwt.verify(token, JWT_SECRET);
+        // decoded should contain adminId
+        if (decoded && decoded.adminId) {
+          try {
+            const admin = await Admin.findById(decoded.adminId);
+            if (admin) {
+              socket.user = { type: 'admin', admin };
+              logger.info('Socket authenticated as admin', { socketId: socket.id, adminId: admin._id });
+            }
+          } catch (err) {
+            logger.warn('Admin lookup failed for socket token', { socketId: socket.id, error: err?.message || err });
+          }
+        }
+      }
+    } catch (err) {
+      logger.warn('Socket JWT verification failed', { socketId: socket.id, error: err?.message || err });
+    }
     
     // Join poll room
     socket.on('joinPoll', async (data, callback) => {
@@ -44,6 +70,11 @@ export const handleSocketConnection = (io) => {
         
         if (!isValidIdentifier(sessionId)) {
           return callback({ success: false, message: 'Invalid session ID' });
+        }
+
+        // If user requests admin view, ensure socket is authenticated as admin
+        if (userType === 'admin' && (!socket.user || socket.user.type !== 'admin')) {
+          return callback({ success: false, message: 'Unauthorized: admin token required' });
         }
 
         // Resolve to poll document regardless of whether client sent 6-char or 24-char id
@@ -244,8 +275,9 @@ export const handleSocketConnection = (io) => {
       try {
         const { sessionId, adminToken } = data;
 
-        if (!socket.pollData || socket.pollData.userType !== 'admin') {
-          return callback({ success: false, message: 'Unauthorized' });
+        // Require server-side socket authentication for admin actions
+        if (!socket.user || socket.user.type !== 'admin') {
+          return callback({ success: false, message: 'Unauthorized: admin token required' });
         }
 
         if (!isValidIdentifier(sessionId)) {

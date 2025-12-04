@@ -58,7 +58,7 @@ export async function createPoll({ sessionId, question, type, options, duration,
     type,
     options: type === 'open-text' ? [] : options,
     results: type === 'open-text' ? [] : options.map(option => ({ option, votes: 0 })),
-    openResponses: [],
+    responses: [],
     expiresAt: new Date(Date.now() + duration * 1000),
     voters: []
   };
@@ -79,7 +79,11 @@ export async function submitVote({ sessionId, option, userId }) {
 
   if (poll.type === 'open-text') {
     if (!option || option.trim().length === 0) throw new Error('Response text is required.');
-    poll.openResponses.push(validator.escape(option.trim()));
+    poll.responses.push({
+      userId,
+      response: validator.escape(option.trim()),
+      timestamp: new Date()
+    });
   } else {
     option = validator.escape(option.trim());
     const result = poll.results.find(r => r.option === option);
@@ -93,7 +97,6 @@ export async function submitVote({ sessionId, option, userId }) {
 }
 
 export async function getPoll({ sessionId }) {
-  if (!isValidSessionId(sessionId)) throw new Error('Invalid session ID format.');
   if (!isValidIdentifier(sessionId)) throw new Error('Invalid session ID format.');
   const poll = await Poll.findOne(buildPollQuery(sessionId));
   if (!poll) throw new Error('Poll not found.');

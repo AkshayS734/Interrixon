@@ -55,7 +55,7 @@ const UserPanel = () => {
       });
     });
 
-    newSocket.on('connect_error', (error) => {
+    newSocket.on('connect_error', () => {
       setConnectionStatus('error');
       setError('Connection failed. Please check your internet connection.');
       setLoading(false);
@@ -78,7 +78,7 @@ const UserPanel = () => {
       setPoll(prev => prev ? { ...prev, isActive: false, ...data } : null);
     });
 
-    newSocket.on('participantJoined', (data) => {
+    newSocket.on('participantJoined', () => {
       // Could show participant count if needed
     });
 

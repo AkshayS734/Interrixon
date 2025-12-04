@@ -16,10 +16,7 @@ const AdminPanel = () => {
   const [isCreating, setIsCreating] = useState(false);
   const [activePoll, setActivePoll] = useState(null);
 
-  // Generate 6-character session ID
-  function generateSessionId() {
-    return Math.random().toString(36).substring(2, 8).toUpperCase();
-  }
+  // (session IDs are generated server-side when creating a poll)
 
   useEffect(() => {
     // Check if admin is logged in
@@ -30,7 +27,9 @@ const AdminPanel = () => {
     }
 
     // Initialize socket connection
-    const newSocket = io(import.meta.env?.VITE_SOCKET_URL || 'http://localhost:3000');
+    const newSocket = io(import.meta.env?.VITE_SOCKET_URL || 'http://localhost:3000', {
+      auth: { token }
+    });
     
     newSocket.on('connect', () => {
       console.log('Connected to server');
@@ -131,7 +130,7 @@ const AdminPanel = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-purple-50 to-pink-100 p-4">
+    <div className="min-h-screen bg-linear-to-br from-purple-50 to-pink-100 p-4">
       <div className="max-w-4xl mx-auto">
         <div className="bg-white rounded-lg shadow-lg p-8">
           <div className="flex justify-between items-center mb-8">

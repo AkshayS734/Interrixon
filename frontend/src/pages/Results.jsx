@@ -8,7 +8,7 @@ const Results = () => {
   const { sessionId } = useParams();
   const [results, setResults] = useState([]);
   const [poll, setPoll] = useState(null);
-  const [socket, setSocket] = useState(null);
+  // socket state not required here; we use the socket only inside the effect
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [totalVotes, setTotalVotes] = useState(0);
@@ -36,7 +36,7 @@ const Results = () => {
       });
     });
 
-    newSocket.on('connect_error', (error) => {
+    newSocket.on('connect_error', () => {
       setLoading(false);
       setError('Failed to connect to server');
     });
@@ -51,7 +51,7 @@ const Results = () => {
       setPoll(prev => prev ? { ...prev, isActive: false } : null);
     });
 
-    setSocket(newSocket);
+    // no need to store socket in state
 
     return () => {
       newSocket.close();
@@ -64,7 +64,7 @@ const Results = () => {
 
   if (error) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-red-50 to-red-100 flex items-center justify-center p-4">
+      <div className="min-h-screen bg-linear-to-br from-red-50 to-red-100 flex items-center justify-center p-4">
         <div className="bg-white rounded-lg shadow-lg p-8 max-w-md w-full text-center">
           <div className="text-red-500 mb-4">
             <svg className="w-16 h-16 mx-auto" fill="currentColor" viewBox="0 0 20 20">
@@ -95,7 +95,7 @@ const Results = () => {
   }));
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-green-50 to-blue-100 p-4">
+    <div className="min-h-screen bg-linear-to-br from-green-50 to-blue-100 p-4">
       <div className="max-w-6xl mx-auto">
         <div className="bg-white rounded-lg shadow-lg p-8">
           <div className="text-center mb-8">
