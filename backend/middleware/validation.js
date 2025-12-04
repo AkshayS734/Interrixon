@@ -28,7 +28,11 @@ export const schemas = {
   }),
   
   vote: Joi.object({
-    sessionId: Joi.string().alphanum().length(6).required(),
+    // sessionId can be either a 6-char user-facing code or a 24-char ObjectId string
+    sessionId: Joi.alternatives().try(
+      Joi.string().alphanum().length(6),
+      Joi.string().hex().length(24)
+    ).required(),
     vote: Joi.alternatives().try(
       Joi.string().max(200),
       Joi.number().min(1).max(5)

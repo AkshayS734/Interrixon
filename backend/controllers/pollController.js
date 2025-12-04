@@ -2,6 +2,25 @@ import Poll from '../models/Poll.js';
 import logger from '../utils/logger.js';
 import mongoose from 'mongoose';
 
+function isValidIdentifier(id) {
+  if (typeof id !== 'string') return false;
+  const sixChar = /^[A-Z0-9]{6}$/i;
+  const objectId = /^[a-fA-F0-9]{24}$/;
+  return sixChar.test(id) || objectId.test(id);
+}
+
+function buildPollQuery(id) {
+  const objectId = /^[a-fA-F0-9]{24}$/;
+  if (objectId.test(id)) {
+    try {
+      return { $or: [{ sessionId: id }, { _id: mongoose.Types.ObjectId(id) }] };
+    } catch (e) {
+      return { sessionId: id };
+    }
+  }
+  return { sessionId: id };
+}
+
 export const createPoll = async (req, res) => {
   const session = await mongoose.startSession();
   
@@ -61,6 +80,7 @@ export const createPoll = async (req, res) => {
       success: true,
       poll: {
         sessionId: poll.sessionId,
+        systemId: poll._id.toString(),
         question: poll.question,
         type: poll.type,
         options: poll.options,
@@ -91,9 +111,12 @@ export const vote = async (req, res) => {
     session.startTransaction();
     
     const { sessionId, vote, userId } = req.body;
-    
-    const poll = await Poll.findOne({ 
-      sessionId,
+    if (!isValidIdentifier(sessionId)) {
+      return res.status(400).json({ success: false, message: 'Invalid session ID' });
+    }
+
+    const poll = await Poll.findOne({
+      ...buildPollQuery(sessionId),
       expiresAt: { $gt: new Date() },
       isActive: true
     }).session(session);
@@ -140,7 +163,7 @@ export const vote = async (req, res) => {
     }
     
     const updatedPoll = await Poll.findOneAndUpdate(
-      { sessionId },
+      buildPollQuery(sessionId),
       updateQuery,
       { new: true, session }
     );
@@ -178,16 +201,12 @@ export const vote = async (req, res) => {
 export const getPoll = async (req, res) => {
   try {
     const { sessionId } = req.params;
-    
-    if (!sessionId || sessionId.length !== 6) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid session ID'
-      });
+    if (!isValidIdentifier(sessionId)) {
+      return res.status(400).json({ success: false, message: 'Invalid session ID' });
     }
 
-    const poll = await Poll.findOne({ 
-      sessionId,
+    const poll = await Poll.findOne({
+      ...buildPollQuery(sessionId),
       expiresAt: { $gt: new Date() },
       isActive: true
     });
@@ -230,15 +249,11 @@ export const getPoll = async (req, res) => {
 export const getResults = async (req, res) => {
   try {
     const { sessionId } = req.params;
-    
-    if (!sessionId || sessionId.length !== 6) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid session ID'
-      });
+    if (!isValidIdentifier(sessionId)) {
+      return res.status(400).json({ success: false, message: 'Invalid session ID' });
     }
 
-    const poll = await Poll.findOne({ sessionId });
+    const poll = await Poll.findOne(buildPollQuery(sessionId));
 
     if (!poll) {
       return res.status(404).json({
@@ -325,7 +340,7 @@ export const getAdminPolls = async (req, res) => {
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit)
-      .select('sessionId question type voters.length expiresAt isActive createdAt');
+      .select('sessionId question type voters expiresAt isActive createdAt');
 
     const totalPolls = await Poll.countDocuments({ createdBy: adminId });
 
@@ -373,9 +388,8 @@ export const deletePoll = async (req, res) => {
     const { sessionId } = req.params;
     const adminId = req.admin._id;
 
-    const poll = await Poll.findOneAndDelete({ 
-      sessionId, 
-      createdBy: adminId 
+    const poll = await Poll.findOneAndDelete({
+      $and: [ buildPollQuery(sessionId), { createdBy: adminId } ]
     });
 
     if (!poll) {
@@ -412,8 +426,8 @@ export const closePoll = async (req, res) => {
     const adminId = req.admin._id;
 
     const poll = await Poll.findOneAndUpdate(
-      { sessionId, createdBy: adminId },
-      { 
+      { $and: [ buildPollQuery(sessionId), { createdBy: adminId } ] },
+      {
         isActive: false,
         closedAt: new Date()
       },

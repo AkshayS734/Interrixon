@@ -33,6 +33,13 @@ const io = new Server(server, {
   pingInterval: 25000
 });
 
+// Track active connections so we can forcefully destroy them on shutdown
+const activeConnections = new Set();
+server.on('connection', (socket) => {
+  activeConnections.add(socket);
+  socket.on('close', () => activeConnections.delete(socket));
+});
+
 // Security middleware
 app.use(helmet({
   contentSecurityPolicy: {
@@ -154,16 +161,38 @@ handleSocketConnection(io);
 // Graceful shutdown
 const gracefulShutdown = (signal) => {
   logger.info(`Received ${signal}. Starting graceful shutdown...`);
-  
-  server.close(() => {
+
+  // Stop accepting new connections
+  try {
+    io.close();
+    logger.info('Socket.IO server closed');
+  } catch (err) {
+    logger.warn('Error closing Socket.IO server', err?.message || err);
+  }
+
+  // Destroy any remaining active connections (forces server.close callback)
+  for (const sock of activeConnections) {
+    try {
+      sock.destroy();
+    } catch (e) {
+      logger.warn('Error destroying socket', e?.message || e);
+    }
+  }
+
+  server.close(async (err) => {
+    if (err) logger.error('Error closing HTTP server', err?.message || err);
     logger.info('HTTP server closed');
-    
-    mongoose.connection.close(() => {
+
+    try {
+      await mongoose.connection.close();
       logger.info('MongoDB connection closed');
       process.exit(0);
-    });
+    } catch (e) {
+      logger.error('Error closing MongoDB connection', e?.message || e);
+      process.exit(1);
+    }
   });
-  
+
   // Force close after 30 seconds
   setTimeout(() => {
     logger.error('Forcing shutdown after timeout');

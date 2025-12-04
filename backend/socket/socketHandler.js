@@ -1,10 +1,30 @@
 import Poll from '../models/Poll.js';
 import logger from '../utils/logger.js';
 import { createRateLimiter } from '../utils/rateLimiter.js';
+import mongoose from 'mongoose';
 
 // Rate limiters for socket events
 const voteLimiter = createRateLimiter(10, 60); // 10 votes per minute
 const joinLimiter = createRateLimiter(20, 60); // 20 joins per minute
+
+function isValidIdentifier(id) {
+  if (typeof id !== 'string') return false;
+  const sixChar = /^[A-Z0-9]{6}$/i;
+  const objectId = /^[a-fA-F0-9]{24}$/;
+  return sixChar.test(id) || objectId.test(id);
+}
+
+function buildPollQuery(id) {
+  const objectId = /^[a-fA-F0-9]{24}$/;
+  if (objectId.test(id)) {
+    try {
+      return { $or: [{ sessionId: id }, { _id: mongoose.Types.ObjectId(id) }] };
+    } catch (e) {
+      return { sessionId: id };
+    }
+  }
+  return { sessionId: id };
+}
 
 export const handleSocketConnection = (io) => {
   io.on('connection', (socket) => {
@@ -22,15 +42,13 @@ export const handleSocketConnection = (io) => {
           });
         }
         
-        if (!sessionId || sessionId.length !== 6) {
-          return callback({
-            success: false,
-            message: 'Invalid session ID'
-          });
+        if (!isValidIdentifier(sessionId)) {
+          return callback({ success: false, message: 'Invalid session ID' });
         }
 
-        const poll = await Poll.findOne({ 
-          sessionId,
+        // Resolve to poll document regardless of whether client sent 6-char or 24-char id
+        const poll = await Poll.findOne({
+          ...buildPollQuery(sessionId),
           expiresAt: { $gt: new Date() },
           isActive: true
         });
@@ -43,18 +61,21 @@ export const handleSocketConnection = (io) => {
         }
 
         // Join the poll room
-        await socket.join(`poll_${sessionId}`);
-        
+        // Always use the poll's user-facing sessionId as the room identifier
+        const roomSessionId = poll.sessionId;
+
+        await socket.join(`poll_${roomSessionId}`);
+
         // Store user info in socket
         socket.pollData = {
-          sessionId,
+          sessionId: roomSessionId,
           userType,
           joinedAt: new Date()
         };
 
         logger.info('User joined poll', { 
           socketId: socket.id, 
-          sessionId, 
+          sessionId: roomSessionId, 
           userType 
         });
 
@@ -73,8 +94,8 @@ export const handleSocketConnection = (io) => {
         });
 
         // Notify room about new participant
-        socket.to(`poll_${sessionId}`).emit('participantJoined', {
-          participantCount: (await io.in(`poll_${sessionId}`).allSockets()).size
+        socket.to(`poll_${roomSessionId}`).emit('participantJoined', {
+          participantCount: (await io.in(`poll_${roomSessionId}`).allSockets()).size
         });
 
       } catch (error) {
@@ -101,18 +122,29 @@ export const handleSocketConnection = (io) => {
           });
         }
 
-        if (!socket.pollData || socket.pollData.sessionId !== sessionId) {
+        if (!socket.pollData) {
+          return callback({ success: false, message: 'You must join the poll first' });
+        }
+
+        // If the client passed a 24-char id, normalize by resolving the poll
+        let targetSessionId = sessionId;
+        if (!isValidIdentifier(sessionId)) {
+          return callback({ success: false, message: 'Invalid session ID' });
+        }
+
+        const pollForVote = await Poll.findOne(buildPollQuery(sessionId));
+        if (!pollForVote) return callback({ success: false, message: 'Poll not found or expired' });
+
+        targetSessionId = pollForVote.sessionId;
+
+        if (socket.pollData.sessionId !== targetSessionId) {
           return callback({
             success: false,
             message: 'You must join the poll first'
           });
         }
 
-        const poll = await Poll.findOne({ 
-          sessionId,
-          expiresAt: { $gt: new Date() },
-          isActive: true
-        });
+        const poll = pollForVote; // already fetched above
 
         if (!poll) {
           return callback({
@@ -173,7 +205,7 @@ export const handleSocketConnection = (io) => {
         }
 
         const updatedPoll = await Poll.findOneAndUpdate(
-          { sessionId },
+          buildPollQuery(sessionId),
           updateQuery,
           { new: true }
         );
@@ -190,7 +222,7 @@ export const handleSocketConnection = (io) => {
         });
 
         // Broadcast updated results to all users in the poll room
-        io.to(`poll_${sessionId}`).emit('pollUpdate', {
+        io.to(`poll_${targetSessionId}`).emit('pollUpdate', {
           results: updatedPoll.results,
           totalVotes: updatedPoll.voters.length,
           lastUpdate: new Date()
@@ -214,15 +246,16 @@ export const handleSocketConnection = (io) => {
         const { sessionId, adminToken } = data;
 
         if (!socket.pollData || socket.pollData.userType !== 'admin') {
-          return callback({
-            success: false,
-            message: 'Unauthorized'
-          });
+          return callback({ success: false, message: 'Unauthorized' });
+        }
+
+        if (!isValidIdentifier(sessionId)) {
+          return callback({ success: false, message: 'Invalid session ID' });
         }
 
         const poll = await Poll.findOneAndUpdate(
-          { sessionId },
-          { 
+          buildPollQuery(sessionId),
+          {
             isActive: false,
             closedAt: new Date()
           },
@@ -237,7 +270,7 @@ export const handleSocketConnection = (io) => {
         }
 
         logger.info('Poll closed by admin', { 
-          sessionId, 
+          sessionId: poll.sessionId, 
           socketId: socket.id 
         });
 
@@ -247,7 +280,7 @@ export const handleSocketConnection = (io) => {
         });
 
         // Notify all participants
-        io.to(`poll_${sessionId}`).emit('pollClosed', {
+        io.to(`poll_${poll.sessionId}`).emit('pollClosed', {
           message: 'This poll has been closed by the administrator',
           finalResults: poll.results,
           closedAt: new Date()

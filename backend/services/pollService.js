@@ -1,5 +1,6 @@
 import Poll from '../models/Poll.js';
 import validator from 'validator';
+import mongoose from 'mongoose';
 
 function cleanOptions(options) {
   return options
@@ -7,12 +8,29 @@ function cleanOptions(options) {
     .filter(o => o.length > 0);
 }
 
-function isValidSessionId(sessionId) {
-  return typeof sessionId === 'string' && /^[A-F0-9]{24}$/i.test(sessionId);
+function isValidIdentifier(id) {
+  if (typeof id !== 'string') return false;
+  const sixChar = /^[A-Z0-9]{6}$/i;
+  const objectId = /^[a-fA-F0-9]{24}$/;
+  return sixChar.test(id) || objectId.test(id);
 }
 
-export async function createPoll({ sessionId, question, type, options, duration }) {
-  if (!isValidSessionId(sessionId)) throw new Error('Invalid session ID format.');
+function buildPollQuery(id) {
+  // If 24-char hex, allow matching by _id OR sessionId; otherwise match sessionId only
+  const objectId = /^[a-fA-F0-9]{24}$/;
+  if (objectId.test(id)) {
+    try {
+      return { $or: [{ sessionId: id }, { _id: mongoose.Types.ObjectId(id) }] };
+    } catch (e) {
+      // fallback to sessionId only
+      return { sessionId: id };
+    }
+  }
+  return { sessionId: id };
+}
+
+export async function createPoll({ sessionId, question, type, options, duration, createdBy }) {
+  if (!isValidIdentifier(sessionId)) throw new Error('Invalid session ID format.');
   if (!sessionId || !question || !type) throw new Error('SessionId, question, and poll type are required.');
 
   question = validator.escape(question.trim());
@@ -31,6 +49,7 @@ export async function createPoll({ sessionId, question, type, options, duration 
     throw new Error('Poll duration must be a positive number.');
   }
 
+  // Remove any existing poll with same sessionId to ensure uniqueness of user-friendly code
   await Poll.findOneAndDelete({ sessionId });
 
   const pollData = {
@@ -44,15 +63,16 @@ export async function createPoll({ sessionId, question, type, options, duration 
     voters: []
   };
 
+  pollData.createdBy = createdBy;
   const poll = new Poll(pollData);
   return await poll.save();
 }
 
 export async function submitVote({ sessionId, option, userId }) {
-  if (!isValidSessionId(sessionId)) throw new Error('Invalid session ID format.');
+  if (!isValidIdentifier(sessionId)) throw new Error('Invalid session ID format.');
   if (!sessionId || !userId) throw new Error('Session ID and user ID are required.');
 
-  const poll = await Poll.findOne({ sessionId });
+  const poll = await Poll.findOne(buildPollQuery(sessionId));
   if (!poll) throw new Error('Poll not found.');
   if (poll.expiresAt && new Date() > poll.expiresAt) throw new Error('Poll has expired.');
   if (poll.voters.includes(userId)) throw new Error('You have already voted.');
@@ -74,7 +94,8 @@ export async function submitVote({ sessionId, option, userId }) {
 
 export async function getPoll({ sessionId }) {
   if (!isValidSessionId(sessionId)) throw new Error('Invalid session ID format.');
-  const poll = await Poll.findOne({ sessionId });
+  if (!isValidIdentifier(sessionId)) throw new Error('Invalid session ID format.');
+  const poll = await Poll.findOne(buildPollQuery(sessionId));
   if (!poll) throw new Error('Poll not found.');
   return poll;
 }
