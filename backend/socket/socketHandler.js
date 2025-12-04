@@ -48,17 +48,15 @@ export const handleSocketConnection = (io) => {
 
         // Resolve to poll document regardless of whether client sent 6-char or 24-char id
         const poll = await Poll.findOne({
-          ...buildPollQuery(sessionId),
-          expiresAt: { $gt: new Date() },
-          isActive: true
+          ...buildPollQuery(sessionId)
         });
 
         if (!poll) {
-          return callback({
-            success: false,
-            message: 'Poll not found or expired'
-          });
+          return callback({ success: false, message: 'Poll not found' });
         }
+
+        // Allow joining closed/expired polls so that results can be viewed.
+        // We still return the poll's isActive flag so the client can render accordingly.
 
         // Join the poll room
         // Always use the poll's user-facing sessionId as the room identifier
@@ -79,7 +77,7 @@ export const handleSocketConnection = (io) => {
           userType 
         });
 
-        // Send current poll data
+        // Send current poll data (include results even for closed polls)
         callback({
           success: true,
           poll: {
@@ -89,7 +87,8 @@ export const handleSocketConnection = (io) => {
             options: poll.options,
             results: userType === 'admin' ? poll.results : poll.results.map(r => ({ option: r.option, votes: r.votes })),
             expiresAt: poll.expiresAt,
-            totalVotes: poll.voters.length
+            totalVotes: poll.voters.length,
+            isActive: poll.isActive && poll.expiresAt > new Date()
           }
         });
 

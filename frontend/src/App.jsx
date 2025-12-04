@@ -7,6 +7,7 @@ import Home from './pages/Home';
 import AdminSignUp from './pages/AdminSignUp';
 import AdminLogin from './pages/AdminLogin';
 import AdminPanel from './pages/AdminPanel';
+import PreviousPolls from './pages/PreviousPolls';
 import UserPanel from './pages/UserPanel';
 import Results from './pages/Results';
 
@@ -20,6 +21,7 @@ function App() {
             <Route path="/admin/signup" element={<AdminSignUp />} />
             <Route path="/admin/login" element={<AdminLogin />} />
             <Route path="/admin/panel" element={<AdminPanel />} />
+            <Route path="/admin/previous" element={<PreviousPolls />} />
             <Route path="/poll/:sessionId" element={<UserPanel />} />
             <Route path="/results/:sessionId" element={<Results />} />
           </Routes>

@@ -136,12 +136,20 @@ const AdminPanel = () => {
         <div className="bg-white rounded-lg shadow-lg p-8">
           <div className="flex justify-between items-center mb-8">
             <h1 className="text-3xl font-bold text-gray-800">Admin Dashboard</h1>
-            <button
-              onClick={handleLogout}
-              className="bg-red-500 hover:bg-red-600 text-white font-bold py-2 px-4 rounded transition-colors"
-            >
-              Logout
-            </button>
+            <div className="flex items-center space-x-3">
+              <button
+                onClick={() => navigate('/admin/previous')}
+                className="bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-4 rounded transition-colors"
+              >
+                See Previous Polls
+              </button>
+              <button
+                onClick={handleLogout}
+                className="bg-red-500 hover:bg-red-600 text-white font-bold py-2 px-4 rounded transition-colors"
+              >
+                Logout
+              </button>
+            </div>
           </div>
 
           {error && (
