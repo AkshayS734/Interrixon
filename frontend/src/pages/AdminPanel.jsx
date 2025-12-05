@@ -187,6 +187,32 @@ const AdminPanel = () => {
                 />
               </div>
 
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Question Type
+                </label>
+                <select
+                  value={poll.type}
+                  onChange={(e) => {
+                    const newType = e.target.value;
+                    if (newType === 'multiple-choice' && (!poll.options || poll.options.length < 2)) {
+                      setPoll({ ...poll, type: newType, options: ['', ''] });
+                    } else if (newType === 'yes-no') {
+                      setPoll({ ...poll, type: newType, options: ['Yes', 'No'] });
+                    } else {
+                      setPoll({ ...poll, type: newType });
+                    }
+                  }}
+                  disabled={isCreating}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-100"
+                >
+                  <option value="multiple-choice">Multiple Choice</option>
+                  <option value="yes-no">Yes / No</option>
+                  <option value="open-text">Open Text</option>
+                  <option value="rating">Rating (1-5)</option>
+                </select>
+              </div>
+
               {poll.type === 'multiple-choice' && (
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -224,35 +250,6 @@ const AdminPanel = () => {
                   </button>
                 </div>
               )}
-
-              {/* Question type selector */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Question Type
-                </label>
-                <select
-                  value={poll.type}
-                  onChange={(e) => {
-                    const newType = e.target.value;
-                    // when switching to multiple-choice ensure options exist
-                    if (newType === 'multiple-choice' && (!poll.options || poll.options.length < 2)) {
-                      setPoll({ ...poll, type: newType, options: ['', ''] });
-                    } else if (newType === 'yes-no') {
-                      // for yes-no, set options to Yes/No but keep them hidden
-                      setPoll({ ...poll, type: newType, options: ['Yes', 'No'] });
-                    } else {
-                      setPoll({ ...poll, type: newType });
-                    }
-                  }}
-                  disabled={isCreating}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-100"
-                >
-                  <option value="multiple-choice">Multiple Choice</option>
-                  <option value="yes-no">Yes / No</option>
-                  <option value="open-text">Open Text</option>
-                  <option value="rating">Rating (1-5)</option>
-                </select>
-              </div>
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
