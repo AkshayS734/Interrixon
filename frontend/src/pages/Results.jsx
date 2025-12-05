@@ -28,7 +28,12 @@ const Results = () => {
         setLoading(false);
         if (response.success) {
           setPoll(response.poll);
-          setResults(response.poll.results || []);
+          if (response.poll.type === 'multiple-choice' || response.poll.type === 'yes-no') {
+            setResults(response.poll.results || []);
+          } else {
+            // open-text or rating
+            setResults(response.poll.responses || []);
+          }
           setTotalVotes(response.poll.totalVotes || 0);
         } else {
           setError(response.message || 'Failed to join poll');
@@ -42,12 +47,24 @@ const Results = () => {
     });
 
     newSocket.on('pollUpdate', (data) => {
-      setResults(data.results || []);
+      if (data.type === 'multiple-choice' || data.type === 'yes-no') {
+        setResults(data.results || []);
+      } else {
+        setResults(data.responses || []);
+      }
       setTotalVotes(data.totalVotes || 0);
+      // update poll type if provided
+      if (data.type && poll && poll.type !== data.type) {
+        setPoll(prev => prev ? { ...prev, type: data.type } : prev);
+      }
     });
 
     newSocket.on('pollClosed', (data) => {
-      setResults(data.finalResults || []);
+      if (data.type === 'multiple-choice' || data.type === 'yes-no') {
+        setResults(data.finalResults || []);
+      } else {
+        setResults(data.finalResponses || []);
+      }
       setPoll(prev => prev ? { ...prev, isActive: false } : null);
     });
 
@@ -88,11 +105,30 @@ const Results = () => {
     return <Loading message="Loading poll data..." />;
   }
 
-  const chartData = results.map(result => ({
-    option: result.option,
-    votes: result.votes,
-    percentage: totalVotes > 0 ? ((result.votes / totalVotes) * 100).toFixed(1) : 0
-  }));
+  const chartData = (poll && (poll.type === 'multiple-choice' || poll.type === 'yes-no'))
+    ? results.map(result => ({
+        option: result.option,
+        votes: result.votes,
+        percentage: totalVotes > 0 ? ((result.votes / totalVotes) * 100).toFixed(1) : 0
+      }))
+    : [];
+
+  // For rating polls compute average and distribution
+  let ratingStats = { average: 0, distribution: { 1:0,2:0,3:0,4:0,5:0 }, total: 0 };
+  if (poll && poll.type === 'rating') {
+    const ratings = results || [];
+    const total = ratings.length;
+    let sum = 0;
+    const dist = { 1:0,2:0,3:0,4:0,5:0 };
+    ratings.forEach(r => {
+      const val = parseInt(r.response, 10);
+      if (!isNaN(val) && val >=1 && val <=5) {
+        dist[val] = (dist[val] || 0) + 1;
+        sum += val;
+      }
+    });
+    ratingStats = { average: total > 0 ? (sum / total).toFixed(1) : 0, distribution: dist, total };
+  }
 
   return (
     <div className="min-h-screen bg-linear-to-br from-green-50 to-blue-100 p-4">
@@ -117,69 +153,120 @@ const Results = () => {
             <p className="text-gray-600">Total Votes: <span className="font-bold">{totalVotes}</span></p>
           </div>
 
-          {results.length > 0 ? (
-            <>
-              {/* Results Table */}
-              <div className="mb-8">
-                <h3 className="text-lg font-bold mb-4">Vote Breakdown</h3>
-                <div className="overflow-x-auto">
-                  <table className="w-full table-auto">
-                    <thead>
-                      <tr className="bg-gray-50">
-                        <th className="px-4 py-2 text-left">Option</th>
-                        <th className="px-4 py-2 text-center">Votes</th>
-                        <th className="px-4 py-2 text-center">Percentage</th>
-                        <th className="px-4 py-2 text-left">Visual</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {chartData.map((item, index) => (
-                        <tr key={index} className="border-t">
-                          <td className="px-4 py-2 font-medium">{item.option}</td>
-                          <td className="px-4 py-2 text-center">{item.votes}</td>
-                          <td className="px-4 py-2 text-center">{item.percentage}%</td>
-                          <td className="px-4 py-2">
-                            <div className="w-full bg-gray-200 rounded-full h-2">
-                              <div 
-                                className="bg-blue-500 h-2 rounded-full transition-all duration-300"
-                                style={{ width: `${item.percentage}%` }}
-                              ></div>
-                            </div>
-                          </td>
+          {poll.type === 'multiple-choice' || poll.type === 'yes-no' ? (
+            results.length > 0 ? (
+              <>
+                {/* Results Table */}
+                <div className="mb-8">
+                  <h3 className="text-lg font-bold mb-4">Vote Breakdown</h3>
+                  <div className="overflow-x-auto">
+                    <table className="w-full table-auto">
+                      <thead>
+                        <tr className="bg-gray-50">
+                          <th className="px-4 py-2 text-left">Option</th>
+                          <th className="px-4 py-2 text-center">Votes</th>
+                          <th className="px-4 py-2 text-center">Percentage</th>
+                          <th className="px-4 py-2 text-left">Visual</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                      </thead>
+                      <tbody>
+                        {chartData.map((item, index) => (
+                          <tr key={index} className="border-t">
+                            <td className="px-4 py-2 font-medium">{item.option}</td>
+                            <td className="px-4 py-2 text-center">{item.votes}</td>
+                            <td className="px-4 py-2 text-center">{item.percentage}%</td>
+                            <td className="px-4 py-2">
+                              <div className="w-full bg-gray-200 rounded-full h-2">
+                                <div 
+                                  className="bg-blue-500 h-2 rounded-full transition-all duration-300"
+                                  style={{ width: `${item.percentage}%` }}
+                                ></div>
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
-              </div>
 
-              {/* Chart */}
-              <div className="mb-8">
-                <h3 className="text-lg font-bold mb-4">Visual Results</h3>
-                <div className="h-96">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={chartData}>
-                      <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis 
-                        dataKey="option" 
-                        tick={{ fontSize: 12 }}
-                        interval={0}
-                        angle={-45}
-                        textAnchor="end"
-                        height={100}
-                      />
-                      <YAxis />
-                      <Tooltip />
-                      <Legend />
-                      <Bar dataKey="votes" fill="#3B82F6" />
-                    </BarChart>
-                  </ResponsiveContainer>
+                {/* Chart */}
+                <div className="mb-8">
+                  <h3 className="text-lg font-bold mb-4">Visual Results</h3>
+                  <div className="h-96">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={chartData}>
+                        <CartesianGrid strokeDasharray="3 3" />
+                        <XAxis 
+                          dataKey="option" 
+                          tick={{ fontSize: 12 }}
+                          interval={0}
+                          angle={-45}
+                          textAnchor="end"
+                          height={100}
+                        />
+                        <YAxis />
+                        <Tooltip />
+                        <Legend />
+                        <Bar dataKey="votes" fill="#3B82F6" />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div className="text-center py-8">
+                <p className="text-gray-600">No votes have been cast yet.</p>
+              </div>
+            )
+          ) : poll.type === 'open-text' ? (
+            // Open-text responses
+            results.length > 0 ? (
+              <div>
+                <h3 className="text-lg font-bold mb-4">Open Responses</h3>
+                <ul className="space-y-3">
+                  {results.map((r, idx) => (
+                    <li key={idx} className="p-3 bg-gray-50 rounded">
+                      <div className="text-sm text-gray-600">{new Date(r.timestamp).toLocaleString()}</div>
+                      <div className="mt-1 text-gray-800">{r.response}</div>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : (
+              <div className="text-center py-8">
+                <p className="text-gray-600">No responses have been submitted yet.</p>
+              </div>
+            )
+          ) : poll.type === 'rating' ? (
+            // Rating poll summary
+            ratingStats.total > 0 ? (
+              <div>
+                <h3 className="text-lg font-bold mb-4">Rating Summary</h3>
+                <p className="mb-4">Average Rating: <span className="font-bold text-blue-600">{ratingStats.average}</span> ({ratingStats.total} responses)</p>
+                <div className="mb-4">
+                  {Object.entries(ratingStats.distribution).map(([score, count]) => {
+                    const pct = ratingStats.total > 0 ? ((count / ratingStats.total) * 100).toFixed(1) : 0;
+                    return (
+                      <div key={score} className="flex items-center mb-2">
+                        <div className="w-12">{score}</div>
+                        <div className="flex-1 bg-gray-200 h-4 rounded overflow-hidden mr-3">
+                          <div className="bg-blue-500 h-4" style={{ width: `${pct}%` }}></div>
+                        </div>
+                        <div className="w-16 text-right">{count} ({pct}%)</div>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
-            </>
+            ) : (
+              <div className="text-center py-8">
+                <p className="text-gray-600">No ratings submitted yet.</p>
+              </div>
+            )
           ) : (
             <div className="text-center py-8">
-              <p className="text-gray-600">No votes have been cast yet.</p>
+              <p className="text-gray-600">No results available for this poll type.</p>
             </div>
           )}
         </div>

@@ -19,10 +19,10 @@ export const schemas = {
   createPoll: Joi.object({
     question: Joi.string().max(500).required(),
     type: Joi.string().valid('multiple-choice', 'yes-no', 'open-text', 'rating').required(),
-    options: Joi.array().items(Joi.string().max(200)).min(2).when('type', {
+    options: Joi.when('type', {
       is: 'multiple-choice',
-      then: Joi.required(),
-      otherwise: Joi.optional()
+      then: Joi.array().items(Joi.string().max(200)).min(2).required(),
+      otherwise: Joi.array().items(Joi.string().max(200)).optional()
     }),
     duration: Joi.number().min(30).max(3600).default(300)
   }),

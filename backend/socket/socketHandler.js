@@ -143,6 +143,7 @@ export const handleSocketConnection = (io) => {
             type: poll.type,
             options: poll.options,
             results: userType === 'admin' ? poll.results : poll.results.map(r => ({ option: r.option, votes: r.votes })),
+            responses: poll.responses || [],
             expiresAt: poll.expiresAt,
             totalVotes: poll.voters.length,
             isActive: poll.isActive && poll.expiresAt > new Date()
@@ -280,6 +281,8 @@ export const handleSocketConnection = (io) => {
         // Broadcast updated results to all users in the poll room
         io.to(`poll_${targetSessionId}`).emit('pollUpdate', {
           results: updatedPoll.results,
+          responses: updatedPoll.responses || [],
+          type: updatedPoll.type,
           totalVotes: updatedPoll.voters.length,
           lastUpdate: new Date()
         });
@@ -345,6 +348,8 @@ export const handleSocketConnection = (io) => {
         io.to(`poll_${poll.sessionId}`).emit('pollClosed', {
           message: 'This poll has been closed by the administrator',
           finalResults: poll.results,
+          finalResponses: poll.responses || [],
+          type: poll.type,
           closedAt: new Date()
         });
 

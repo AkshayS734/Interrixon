@@ -7,6 +7,7 @@ const AdminPanel = () => {
   const navigate = useNavigate();
   const [poll, setPoll] = useState({
     question: '',
+    type: 'multiple-choice',
     options: ['', '']
   });
   const [duration, setDuration] = useState(300);
@@ -57,21 +58,34 @@ const AdminPanel = () => {
       setError('Poll question cannot be empty.');
       return;
     }
-    
-    const cleanedOptions = poll.options.map(opt => opt.trim()).filter(opt => opt);
-    if (cleanedOptions.length < 2) {
-      setError('At least two non-empty options are required.');
-      return;
+    const type = poll.type;
+    let cleanedOptions = [];
+
+    if (type === 'multiple-choice') {
+      cleanedOptions = poll.options.map(opt => opt.trim()).filter(opt => opt);
+      if (cleanedOptions.length < 2) {
+        setError('At least two non-empty options are required for multiple-choice polls.');
+        return;
+      }
+    } else if (type === 'yes-no') {
+      cleanedOptions = ['Yes', 'No'];
+    } else if (type === 'rating') {
+      // rating polls don't need options, responses are numeric
+      cleanedOptions = [];
+    } else if (type === 'open-text') {
+      cleanedOptions = [];
     }
 
     setIsCreating(true);
     setError('');
     
     try {
+      // Debug: show payload about to be sent
+      console.debug('Creating poll payload', { type: poll.type, options: cleanedOptions, question: poll.question.trim(), duration });
       const token = localStorage.getItem('adminToken');
       const response = await axios.post(`${import.meta.env?.VITE_API_URL || 'http://localhost:3000'}/api/polls/create`, {
         question: poll.question.trim(),
-        type: 'multiple-choice',
+        type: poll.type,
         options: cleanedOptions,
         duration
       }, {
@@ -173,40 +187,71 @@ const AdminPanel = () => {
                 />
               </div>
 
+              {poll.type === 'multiple-choice' && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Options
+                  </label>
+                  {poll.options.map((option, index) => (
+                    <div key={index} className="flex items-center mb-2">
+                      <input
+                        type="text"
+                        value={option}
+                        onChange={(e) => updateOption(index, e.target.value)}
+                        placeholder={`Option ${index + 1}`}
+                        disabled={isCreating}
+                        className="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-100"
+                      />
+                      {poll.options.length > 2 && (
+                        <button
+                          type="button"
+                          onClick={() => removeOption(index)}
+                          disabled={isCreating}
+                          className="ml-2 px-3 py-2 bg-red-500 text-white rounded hover:bg-red-600 disabled:bg-gray-400"
+                        >
+                          Remove
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                  <button
+                    type="button"
+                    onClick={addOption}
+                    disabled={isCreating}
+                    className="mt-2 px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600 disabled:bg-gray-400"
+                  >
+                    Add Option
+                  </button>
+                </div>
+              )}
+
+              {/* Question type selector */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Options
+                  Question Type
                 </label>
-                {poll.options.map((option, index) => (
-                  <div key={index} className="flex items-center mb-2">
-                    <input
-                      type="text"
-                      value={option}
-                      onChange={(e) => updateOption(index, e.target.value)}
-                      placeholder={`Option ${index + 1}`}
-                      disabled={isCreating}
-                      className="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-100"
-                    />
-                    {poll.options.length > 2 && (
-                      <button
-                        type="button"
-                        onClick={() => removeOption(index)}
-                        disabled={isCreating}
-                        className="ml-2 px-3 py-2 bg-red-500 text-white rounded hover:bg-red-600 disabled:bg-gray-400"
-                      >
-                        Remove
-                      </button>
-                    )}
-                  </div>
-                ))}
-                <button
-                  type="button"
-                  onClick={addOption}
+                <select
+                  value={poll.type}
+                  onChange={(e) => {
+                    const newType = e.target.value;
+                    // when switching to multiple-choice ensure options exist
+                    if (newType === 'multiple-choice' && (!poll.options || poll.options.length < 2)) {
+                      setPoll({ ...poll, type: newType, options: ['', ''] });
+                    } else if (newType === 'yes-no') {
+                      // for yes-no, set options to Yes/No but keep them hidden
+                      setPoll({ ...poll, type: newType, options: ['Yes', 'No'] });
+                    } else {
+                      setPoll({ ...poll, type: newType });
+                    }
+                  }}
                   disabled={isCreating}
-                  className="mt-2 px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600 disabled:bg-gray-400"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-100"
                 >
-                  Add Option
-                </button>
+                  <option value="multiple-choice">Multiple Choice</option>
+                  <option value="yes-no">Yes / No</option>
+                  <option value="open-text">Open Text</option>
+                  <option value="rating">Rating (1-5)</option>
+                </select>
               </div>
 
               <div>
@@ -263,7 +308,7 @@ const AdminPanel = () => {
                   onClick={() => {
                     setActivePoll(null);
                     setResults([]);
-                    setPoll({ question: '', options: ['', ''] });
+                    setPoll({ question: '', type: 'multiple-choice', options: ['', ''] });
                   }}
                   className="bg-gray-500 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded transition-colors"
                 >

@@ -67,10 +67,19 @@ export async function createPoll({ sessionId, question, type, options, duration,
     throw new Error('Invalid poll type.');
   }
 
-  if (type !== 'open-text') {
+  // Handle options per poll type
+  if (type === 'multiple-choice') {
     options = cleanOptions(options);
     if (options.length < 2) throw new Error('At least 2 options required.');
     if (new Set(options).size !== options.length) throw new Error('Poll options must be unique.');
+  } else if (type === 'yes-no') {
+    // enforce Yes/No options server-side
+    options = ['Yes', 'No'];
+  } else if (type === 'rating') {
+    // rating polls don't require explicit options; responses are numeric
+    options = [];
+  } else if (type === 'open-text') {
+    options = [];
   }
 
   if (!duration || typeof duration !== 'number' || duration < 1) {

@@ -25,6 +25,7 @@ function buildPollQuery(id) {
 export const createPoll = async (req, res) => {
   try {
     const { question, type, options, duration } = req.body;
+    logger.info('Create poll request received', { body: req.body, adminId: req.admin?._id });
     const createdBy = req.admin._id;
 
     const poll = await serviceCreatePoll({ question, type, options, duration, createdBy });
