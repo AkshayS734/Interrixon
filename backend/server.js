@@ -120,6 +120,15 @@ const connectDB = async () => {
   const maxRetries = 5;
   let retries = 0;
 
+  // Configure mongoose autoIndex: enable in development, disable in production by default
+  try {
+    const autoIndex = config.env !== 'production';
+    mongoose.set('autoIndex', autoIndex);
+    logger.info(`Mongoose autoIndex set to ${autoIndex}`);
+  } catch (e) {
+    logger.warn('Failed to set mongoose autoIndex', e?.message || e);
+  }
+
   while (retries < maxRetries) {
     try {
       await mongoose.connect(config.mongodb.uri, {

@@ -1,6 +1,7 @@
 import Poll from '../models/Poll.js';
 import logger from '../utils/logger.js';
 import mongoose from 'mongoose';
+import { createPoll as serviceCreatePoll, submitVote as serviceSubmitVote } from '../services/pollService.js';
 
 function isValidIdentifier(id) {
   if (typeof id !== 'string') return false;
@@ -22,58 +23,17 @@ function buildPollQuery(id) {
 }
 
 export const createPoll = async (req, res) => {
-  const session = await mongoose.startSession();
-  
   try {
-    session.startTransaction();
-    
     const { question, type, options, duration } = req.body;
-    
-    // Generate unique session ID
-    let sessionId;
-    let isUnique = false;
-    let attempts = 0;
-    
-    while (!isUnique && attempts < 5) {
-      sessionId = Math.random().toString(36).substring(2, 8).toUpperCase();
-      const existingPoll = await Poll.findOne({ sessionId }).session(session);
-      if (!existingPoll) {
-        isUnique = true;
-      }
-      attempts++;
-    }
-    
-    if (!isUnique) {
-      throw new Error('Unable to generate unique session ID');
-    }
+    const createdBy = req.admin._id;
 
-    const expiresAt = new Date(Date.now() + duration * 1000);
-    
-    const poll = new Poll({
-      sessionId,
-      question: question.trim(),
-      type,
-      options: type === 'multiple-choice' ? options.map(opt => opt.trim()) : [],
-      results: type === 'multiple-choice' ? 
-        options.map(option => ({ option: option.trim(), votes: 0 })) : 
-        type === 'yes-no' ?
-        [{ option: 'Yes', votes: 0 }, { option: 'No', votes: 0 }] :
-        [],
-      expiresAt,
-      voters: [],
-      responses: [],
-      createdBy: req.admin._id,
-      createdAt: new Date()
-    });
+    const poll = await serviceCreatePoll({ question, type, options, duration, createdBy });
 
-    await poll.save({ session });
-    await session.commitTransaction();
-    
-    logger.info('Poll created', { 
-      sessionId, 
-      adminId: req.admin._id,
+    logger.info('Poll created', {
+      sessionId: poll.sessionId,
+      adminId: createdBy,
       type,
-      duration 
+      duration
     });
 
     res.status(201).json({
@@ -87,114 +47,34 @@ export const createPoll = async (req, res) => {
         expiresAt: poll.expiresAt
       }
     });
-
   } catch (error) {
-    await session.abortTransaction();
-    logger.error('Poll creation error', { 
+    logger.error('Poll creation error', {
       error: error.message,
-      adminId: req.admin._id 
+      adminId: req.admin?._id
     });
-    
-    res.status(500).json({
-      success: false,
-      message: 'Failed to create poll'
-    });
-  } finally {
-    session.endSession();
+    res.status(500).json({ success: false, message: error.message || 'Failed to create poll' });
   }
 };
 
 export const vote = async (req, res) => {
-  const session = await mongoose.startSession();
-  
   try {
-    session.startTransaction();
-    
-    const { sessionId, vote, userId } = req.body;
+    const { sessionId, vote: voteValue, userId } = req.body;
     if (!isValidIdentifier(sessionId)) {
       return res.status(400).json({ success: false, message: 'Invalid session ID' });
     }
 
-    const poll = await Poll.findOne({
-      ...buildPollQuery(sessionId),
-      expiresAt: { $gt: new Date() },
-      isActive: true
-    }).session(session);
-    
-    if (!poll) {
-      return res.status(404).json({
-        success: false,
-        message: 'Poll not found or expired'
-      });
-    }
-    
-    // Check if user already voted
-    if (poll.voters.includes(userId)) {
-      return res.status(400).json({
-        success: false,
-        message: 'You have already voted in this poll'
-      });
-    }
-    
-    // Process vote based on poll type
-    let updateQuery = {};
-    
-    if (poll.type === 'multiple-choice' || poll.type === 'yes-no') {
-      const optionIndex = poll.results.findIndex(r => r.option === vote);
-      if (optionIndex === -1) {
-        return res.status(400).json({
-          success: false,
-          message: 'Invalid option selected'
-        });
-      }
-      
-      updateQuery = {
-        $inc: { [`results.${optionIndex}.votes`]: 1 },
-        $push: { voters: userId }
-      };
-    } else {
-      // For other poll types, store the vote
-      updateQuery = {
-        $push: { 
-          voters: userId,
-          responses: { userId, response: vote, timestamp: new Date() }
-        }
-      };
-    }
-    
-    const updatedPoll = await Poll.findOneAndUpdate(
-      buildPollQuery(sessionId),
-      updateQuery,
-      { new: true, session }
-    );
-    
-    await session.commitTransaction();
-    
-    logger.info('Vote recorded', { 
-      sessionId, 
-      userId, 
-      vote: poll.type === 'multiple-choice' || poll.type === 'yes-no' ? vote : '[response]'
-    });
-    
-    res.json({
-      success: true,
-      message: 'Vote recorded successfully',
-      results: updatedPoll.results
+    const updatedPoll = await serviceSubmitVote({ sessionId, option: voteValue, userId });
+
+    logger.info('Vote recorded', {
+      sessionId,
+      userId,
+      vote: updatedPoll.type === 'multiple-choice' || updatedPoll.type === 'yes-no' ? voteValue : '[response]'
     });
 
+    res.json({ success: true, message: 'Vote recorded successfully', results: updatedPoll.results });
   } catch (error) {
-    await session.abortTransaction();
-    logger.error('Vote error', { 
-      error: error.message,
-      sessionId: req.body.sessionId 
-    });
-    
-    res.status(500).json({
-      success: false,
-      message: 'Failed to record vote'
-    });
-  } finally {
-    session.endSession();
+    logger.error('Vote error', { error: error.message, sessionId: req.body.sessionId });
+    res.status(500).json({ success: false, message: error.message || 'Failed to record vote' });
   }
 };
 

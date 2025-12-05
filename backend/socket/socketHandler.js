@@ -30,6 +30,26 @@ function buildPollQuery(id) {
   return { sessionId: id };
 }
 
+async function verifyAdminToken(token) {
+  if (!token) return null;
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    if (decoded && decoded.adminId) {
+      try {
+        const admin = await Admin.findById(decoded.adminId);
+        return admin || null;
+      } catch (err) {
+        logger.warn('Admin lookup failed in per-event token verify', { error: err?.message || err });
+        return null;
+      }
+    }
+    return null;
+  } catch (err) {
+    logger.warn('Per-event admin token verification failed', { error: err?.message || err });
+    return null;
+  }
+}
+
 export const handleSocketConnection = (io) => {
   io.on('connection', async (socket) => {
     logger.info('Client connected', { socketId: socket.id });
@@ -59,7 +79,7 @@ export const handleSocketConnection = (io) => {
     // Join poll room
     socket.on('joinPoll', async (data, callback) => {
       try {
-        const { sessionId, userType = 'user' } = data;
+        const { sessionId, userType = 'user', adminToken } = data;
         
         if (!joinLimiter.check(socket.id)) {
           return callback({
@@ -74,7 +94,13 @@ export const handleSocketConnection = (io) => {
 
         // If user requests admin view, ensure socket is authenticated as admin
         if (userType === 'admin' && (!socket.user || socket.user.type !== 'admin')) {
-          return callback({ success: false, message: 'Unauthorized: admin token required' });
+          // Try per-event admin token fallback
+          const perEventAdmin = await verifyAdminToken(adminToken);
+          if (!perEventAdmin) {
+            return callback({ success: false, message: 'Unauthorized: admin token required' });
+          }
+          // attach temporary admin for this socket event
+          socket.user = { type: 'admin', admin: perEventAdmin };
         }
 
         // Resolve to poll document regardless of whether client sent 6-char or 24-char id
@@ -277,7 +303,12 @@ export const handleSocketConnection = (io) => {
 
         // Require server-side socket authentication for admin actions
         if (!socket.user || socket.user.type !== 'admin') {
-          return callback({ success: false, message: 'Unauthorized: admin token required' });
+          // fallback to per-event token
+          const perEventAdmin = await verifyAdminToken(adminToken);
+          if (!perEventAdmin) {
+            return callback({ success: false, message: 'Unauthorized: admin token required' });
+          }
+          socket.user = { type: 'admin', admin: perEventAdmin };
         }
 
         if (!isValidIdentifier(sessionId)) {

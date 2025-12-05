@@ -4,8 +4,15 @@ import mongoose from 'mongoose';
 
 function cleanOptions(options) {
   return options
-    .map(o => (typeof o === 'string' ? validator.escape(o.trim()) : ''))
+    .map(o => (typeof o === 'string' ? sanitizeText(o.trim()) : ''))
     .filter(o => o.length > 0);
+}
+
+// Escape potentially dangerous characters except keep forward-slash '/' as-is
+function sanitizeText(str) {
+  if (typeof str !== 'string') return '';
+  // validator.escape converts '/' to HTML entity; restore it so user-entered slashes stay
+  return validator.escape(str).replace(/&#x2F;|&#47;/g, '/');
 }
 
 function isValidIdentifier(id) {
@@ -30,10 +37,31 @@ function buildPollQuery(id) {
 }
 
 export async function createPoll({ sessionId, question, type, options, duration, createdBy }) {
-  if (!isValidIdentifier(sessionId)) throw new Error('Invalid session ID format.');
-  if (!sessionId || !question || !type) throw new Error('SessionId, question, and poll type are required.');
+  // If sessionId provided, validate it. Otherwise generate a unique 6-char sessionId.
+  const originalSessionIdProvided = Boolean(sessionId);
+  if (sessionId && !isValidIdentifier(sessionId)) throw new Error('Invalid session ID format.');
+  if (!question || !type) throw new Error('Question and poll type are required.');
 
-  question = validator.escape(question.trim());
+  // Generate a unique 6-character sessionId when not supplied
+  if (!sessionId) {
+    let attempts = 0;
+    let isUnique = false;
+    while (!isUnique && attempts < 10) {
+      const candidate = Math.random().toString(36).substring(2, 8).toUpperCase();
+      // check DB for existing
+      // eslint-disable-next-line no-await-in-loop
+      const existing = await Poll.findOne({ sessionId: candidate }).select('_id').lean();
+      if (!existing) {
+        sessionId = candidate;
+        isUnique = true;
+        break;
+      }
+      attempts += 1;
+    }
+    if (!isUnique) throw new Error('Unable to generate a unique session ID.');
+  }
+
+  question = sanitizeText(question.trim());
 
   if (!['multiple-choice', 'yes-no', 'open-text', 'rating'].includes(type)) {
     throw new Error('Invalid poll type.');
@@ -49,9 +77,6 @@ export async function createPoll({ sessionId, question, type, options, duration,
     throw new Error('Poll duration must be a positive number.');
   }
 
-  // Remove any existing poll with same sessionId to ensure uniqueness of user-friendly code
-  await Poll.findOneAndDelete({ sessionId });
-
   const pollData = {
     sessionId,
     question,
@@ -64,8 +89,37 @@ export async function createPoll({ sessionId, question, type, options, duration,
   };
 
   pollData.createdBy = createdBy;
-  const poll = new Poll(pollData);
-  return await poll.save();
+  // Try saving; if a duplicate key for sessionId occurs (race condition),
+  // retry with a new generated sessionId when the id was not provided by the caller.
+  const maxSaveAttempts = 10;
+  for (let attempt = 0; attempt < maxSaveAttempts; attempt++) {
+    try {
+      const poll = new Poll(pollData);
+      return await poll.save();
+    } catch (err) {
+      // Duplicate key error (E11000) for sessionId
+      const isDupKey = err && (err.code === 11000 || err.code === 11001);
+      const dupSession = isDupKey && err.keyPattern && err.keyPattern.sessionId;
+      if (isDupKey && (dupSession || (err.message && err.message.includes('sessionId')))) {
+        if (originalSessionIdProvided) {
+          // Caller explicitly supplied sessionId, surface conflict
+          throw new Error('SessionId already in use.');
+        }
+        // otherwise generate a new sessionId and retry
+        const candidate = Math.random().toString(36).substring(2, 8).toUpperCase();
+        // ensure format
+        if (!isValidIdentifier(candidate)) {
+          continue;
+        }
+        pollData.sessionId = candidate;
+        // try next iteration
+        continue;
+      }
+      // Other errors bubble up
+      throw err;
+    }
+  }
+  throw new Error('Unable to create poll after several attempts due to sessionId conflicts.');
 }
 
 export async function submitVote({ sessionId, option, userId }) {
@@ -81,11 +135,11 @@ export async function submitVote({ sessionId, option, userId }) {
     if (!option || option.trim().length === 0) throw new Error('Response text is required.');
     poll.responses.push({
       userId,
-      response: validator.escape(option.trim()),
+      response: sanitizeText(option.trim()),
       timestamp: new Date()
     });
   } else {
-    option = validator.escape(option.trim());
+    option = sanitizeText(option.trim());
     const result = poll.results.find(r => r.option === option);
     if (!result) throw new Error('Option not found.');
     result.votes += 1;
