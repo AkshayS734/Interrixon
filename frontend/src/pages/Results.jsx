@@ -6,12 +6,9 @@ import Loading from '../components/Loading';
 
 const Results = () => {
   const { sessionId } = useParams();
-  const [results, setResults] = useState([]);
   const [poll, setPoll] = useState(null);
-  // socket state not required here; we use the socket only inside the effect
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [totalVotes, setTotalVotes] = useState(0);
 
   useEffect(() => {
     if (!sessionId) {
@@ -28,13 +25,6 @@ const Results = () => {
         setLoading(false);
         if (response.success) {
           setPoll(response.poll);
-          if (response.poll.type === 'multiple-choice' || response.poll.type === 'yes-no') {
-            setResults(response.poll.results || []);
-          } else {
-            // open-text or rating
-            setResults(response.poll.responses || []);
-          }
-          setTotalVotes(response.poll.totalVotes || 0);
         } else {
           setError(response.message || 'Failed to join poll');
         }
@@ -46,29 +36,25 @@ const Results = () => {
       setError('Failed to connect to server');
     });
 
-    newSocket.on('pollUpdate', (data) => {
-      if (data.type === 'multiple-choice' || data.type === 'yes-no') {
-        setResults(data.results || []);
-      } else {
-        setResults(data.responses || []);
-      }
-      setTotalVotes(data.totalVotes || 0);
-      // update poll type if provided
-      if (data.type && poll && poll.type !== data.type) {
-        setPoll(prev => prev ? { ...prev, type: data.type } : prev);
-      }
+    newSocket.on('pollUpdate', (pollUpdateData) => {
+      // Update specific question's results
+      setPoll(prev => {
+        if (!prev) return null;
+        const updated = { ...prev };
+        if (pollUpdateData.questionId && updated.questions) {
+          const qIndex = updated.questions.findIndex(q => q._id === pollUpdateData.questionId);
+          if (qIndex !== -1) {
+            updated.questions[qIndex].results = pollUpdateData.results;
+          }
+        }
+        updated.totalVotes = pollUpdateData.totalVotes;
+        return updated;
+      });
     });
 
-    newSocket.on('pollClosed', (data) => {
-      if (data.type === 'multiple-choice' || data.type === 'yes-no') {
-        setResults(data.finalResults || []);
-      } else {
-        setResults(data.finalResponses || []);
-      }
+    newSocket.on('pollClosed', () => {
       setPoll(prev => prev ? { ...prev, isActive: false } : null);
     });
-
-    // no need to store socket in state
 
     return () => {
       newSocket.close();
@@ -101,41 +87,169 @@ const Results = () => {
     );
   }
 
-  if (!poll) {
+  if (!poll || !poll.questions) {
     return <Loading message="Loading poll data..." />;
   }
 
-  const chartData = (poll && (poll.type === 'multiple-choice' || poll.type === 'yes-no'))
-    ? results.map(result => ({
+  const questions = poll.questions || [];
+  if (questions.length === 0) {
+    return <Loading message="Loading poll data..." />;
+  }
+
+  // Helper function to render results for a single question
+  const renderQuestionResults = (question, totalVotes) => {
+    const { type, results } = question;
+
+    if (type === 'multiple-choice' || type === 'yes-no') {
+      if (!results || results.length === 0) {
+        return (
+          <div className="text-center py-8">
+            <p className="text-gray-600">No votes have been cast yet.</p>
+          </div>
+        );
+      }
+
+      const chartData = results.map(result => ({
         option: result.option,
         votes: result.votes,
         percentage: totalVotes > 0 ? ((result.votes / totalVotes) * 100).toFixed(1) : 0
-      }))
-    : [];
+      }));
 
-  // For rating polls compute average and distribution
-  let ratingStats = { average: 0, distribution: { 1:0,2:0,3:0,4:0,5:0 }, total: 0 };
-  if (poll && poll.type === 'rating') {
-    const ratings = results || [];
-    const total = ratings.length;
-    let sum = 0;
-    const dist = { 1:0,2:0,3:0,4:0,5:0 };
-    ratings.forEach(r => {
-      const val = parseInt(r.response, 10);
-      if (!isNaN(val) && val >=1 && val <=5) {
-        dist[val] = (dist[val] || 0) + 1;
-        sum += val;
+      return (
+        <>
+          {/* Results Table */}
+          <div className="mb-8">
+            <h4 className="text-md font-semibold mb-3">Vote Breakdown</h4>
+            <div className="overflow-x-auto">
+              <table className="w-full table-auto text-sm">
+                <thead>
+                  <tr className="bg-gray-50">
+                    <th className="px-3 py-2 text-left">Option</th>
+                    <th className="px-3 py-2 text-center">Votes</th>
+                    <th className="px-3 py-2 text-center">Percentage</th>
+                    <th className="px-3 py-2 text-left">Visual</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {chartData.map((item, index) => (
+                    <tr key={index} className="border-t">
+                      <td className="px-3 py-2 font-medium">{item.option}</td>
+                      <td className="px-3 py-2 text-center">{item.votes}</td>
+                      <td className="px-3 py-2 text-center">{item.percentage}%</td>
+                      <td className="px-3 py-2">
+                        <div className="w-full bg-gray-200 rounded-full h-2">
+                          <div 
+                            className="bg-blue-500 h-2 rounded-full transition-all duration-300"
+                            style={{ width: `${item.percentage}%` }}
+                          ></div>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Chart */}
+          <div className="mb-8">
+            <h4 className="text-md font-semibold mb-3">Visual Results</h4>
+            <div className="h-64">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={chartData}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis 
+                    dataKey="option" 
+                    tick={{ fontSize: 11 }}
+                    interval={0}
+                    angle={-30}
+                    textAnchor="end"
+                    height={80}
+                  />
+                  <YAxis />
+                  <Tooltip />
+                  <Bar dataKey="votes" fill="#3B82F6" />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+        </>
+      );
+    } else if (type === 'open-text') {
+      const responses = poll.responses.filter(r => r.questionId === question._id);
+      
+      return responses.length > 0 ? (
+        <div>
+          <h4 className="text-md font-semibold mb-3">Open Responses</h4>
+          <ul className="space-y-2 max-h-96 overflow-y-auto">
+            {responses.map((r, idx) => (
+              <li key={idx} className="p-3 bg-gray-50 rounded text-sm">
+                <div className="text-xs text-gray-500 mb-1">{new Date(r.timestamp).toLocaleString()}</div>
+                <div className="text-gray-800">{r.response}</div>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : (
+        <div className="text-center py-8">
+          <p className="text-gray-600">No responses have been submitted yet.</p>
+        </div>
+      );
+    } else if (type === 'rating') {
+      const responses = poll.responses.filter(r => r.questionId === question._id);
+      if (responses.length === 0) {
+        return (
+          <div className="text-center py-8">
+            <p className="text-gray-600">No ratings submitted yet.</p>
+          </div>
+        );
       }
-    });
-    ratingStats = { average: total > 0 ? (sum / total).toFixed(1) : 0, distribution: dist, total };
-  }
+
+      // Calculate statistics
+      const distribution = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+      let sum = 0;
+      responses.forEach(r => {
+        const val = parseInt(r.response, 10);
+        if (!isNaN(val) && val >= 1 && val <= 5) {
+          distribution[val] = (distribution[val] || 0) + 1;
+          sum += val;
+        }
+      });
+
+      const average = responses.length > 0 ? (sum / responses.length).toFixed(2) : 0;
+
+      return (
+        <div>
+          <h4 className="text-md font-semibold mb-3">Rating Summary</h4>
+          <p className="mb-4">Average Rating: <span className="font-bold text-blue-600 text-lg">{average}</span> ({responses.length} responses)</p>
+          <div>
+            {[1, 2, 3, 4, 5].map((score) => {
+              const count = distribution[score];
+              const pct = responses.length > 0 ? ((count / responses.length) * 100).toFixed(1) : 0;
+              return (
+                <div key={score} className="flex items-center mb-2 text-sm">
+                  <div className="w-8 font-semibold">{score}★</div>
+                  <div className="flex-1 bg-gray-200 h-3 rounded overflow-hidden mx-3">
+                    <div className="bg-yellow-400 h-3 transition-all duration-300" style={{ width: `${pct}%` }}></div>
+                  </div>
+                  <div className="w-20 text-right">{count} ({pct}%)</div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      );
+    }
+
+    return <div className="text-center py-8"><p className="text-gray-600">Unknown question type.</p></div>;
+  };
 
   return (
     <div className="min-h-screen bg-linear-to-br from-green-50 to-blue-100 p-4">
       <div className="max-w-6xl mx-auto">
         <div className="bg-white rounded-lg shadow-lg p-8">
           <div className="text-center mb-8">
-            <h1 className="text-3xl font-bold text-gray-800 mb-2">Poll Results</h1>
+            <h1 className="text-3xl font-bold text-gray-800 mb-1">{poll.pollName || 'Poll Results'}</h1>
             <p className="text-gray-600">Session: {sessionId}</p>
             {poll.isActive ? (
               <span className="inline-block mt-2 px-3 py-1 bg-green-100 text-green-800 rounded-full text-sm">
@@ -148,127 +262,23 @@ const Results = () => {
             )}
           </div>
 
-          <div className="mb-8">
-            <h2 className="text-xl font-bold text-gray-800 mb-4">{poll.question}</h2>
-            <p className="text-gray-600">Total Votes: <span className="font-bold">{totalVotes}</span></p>
+          <div className="mb-8 p-4 bg-blue-50 rounded">
+            <p className="text-gray-700">Total Votes: <span className="font-bold text-lg">{poll.totalVotes}</span></p>
+            <p className="text-gray-600 text-sm mt-1">{questions.length} question(s)</p>
           </div>
 
-          {poll.type === 'multiple-choice' || poll.type === 'yes-no' ? (
-            results.length > 0 ? (
-              <>
-                {/* Results Table */}
-                <div className="mb-8">
-                  <h3 className="text-lg font-bold mb-4">Vote Breakdown</h3>
-                  <div className="overflow-x-auto">
-                    <table className="w-full table-auto">
-                      <thead>
-                        <tr className="bg-gray-50">
-                          <th className="px-4 py-2 text-left">Option</th>
-                          <th className="px-4 py-2 text-center">Votes</th>
-                          <th className="px-4 py-2 text-center">Percentage</th>
-                          <th className="px-4 py-2 text-left">Visual</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {chartData.map((item, index) => (
-                          <tr key={index} className="border-t">
-                            <td className="px-4 py-2 font-medium">{item.option}</td>
-                            <td className="px-4 py-2 text-center">{item.votes}</td>
-                            <td className="px-4 py-2 text-center">{item.percentage}%</td>
-                            <td className="px-4 py-2">
-                              <div className="w-full bg-gray-200 rounded-full h-2">
-                                <div 
-                                  className="bg-blue-500 h-2 rounded-full transition-all duration-300"
-                                  style={{ width: `${item.percentage}%` }}
-                                ></div>
-                              </div>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
+          {/* Render each question and its results */}
+          <div className="space-y-8">
+            {questions.map((question, qIndex) => (
+              <div key={question._id} className="border border-gray-300 rounded p-6 bg-gray-50">
+                <div className="mb-6">
+                  <h3 className="text-lg font-bold text-gray-800 mb-1">Question {qIndex + 1}: {question.question}</h3>
+                  <p className="text-sm text-gray-600">Type: <span className="font-semibold">{question.type}</span></p>
                 </div>
-
-                {/* Chart */}
-                <div className="mb-8">
-                  <h3 className="text-lg font-bold mb-4">Visual Results</h3>
-                  <div className="h-96">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={chartData}>
-                        <CartesianGrid strokeDasharray="3 3" />
-                        <XAxis 
-                          dataKey="option" 
-                          tick={{ fontSize: 12 }}
-                          interval={0}
-                          angle={-45}
-                          textAnchor="end"
-                          height={100}
-                        />
-                        <YAxis />
-                        <Tooltip />
-                        <Legend />
-                        <Bar dataKey="votes" fill="#3B82F6" />
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </div>
-                </div>
-              </>
-            ) : (
-              <div className="text-center py-8">
-                <p className="text-gray-600">No votes have been cast yet.</p>
+                {renderQuestionResults(question, poll.totalVotes)}
               </div>
-            )
-          ) : poll.type === 'open-text' ? (
-            // Open-text responses
-            results.length > 0 ? (
-              <div>
-                <h3 className="text-lg font-bold mb-4">Open Responses</h3>
-                <ul className="space-y-3">
-                  {results.map((r, idx) => (
-                    <li key={idx} className="p-3 bg-gray-50 rounded">
-                      <div className="text-sm text-gray-600">{new Date(r.timestamp).toLocaleString()}</div>
-                      <div className="mt-1 text-gray-800">{r.response}</div>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ) : (
-              <div className="text-center py-8">
-                <p className="text-gray-600">No responses have been submitted yet.</p>
-              </div>
-            )
-          ) : poll.type === 'rating' ? (
-            // Rating poll summary
-            ratingStats.total > 0 ? (
-              <div>
-                <h3 className="text-lg font-bold mb-4">Rating Summary</h3>
-                <p className="mb-4">Average Rating: <span className="font-bold text-blue-600">{ratingStats.average}</span> ({ratingStats.total} responses)</p>
-                <div className="mb-4">
-                  {Object.entries(ratingStats.distribution).map(([score, count]) => {
-                    const pct = ratingStats.total > 0 ? ((count / ratingStats.total) * 100).toFixed(1) : 0;
-                    return (
-                      <div key={score} className="flex items-center mb-2">
-                        <div className="w-12">{score}</div>
-                        <div className="flex-1 bg-gray-200 h-4 rounded overflow-hidden mr-3">
-                          <div className="bg-blue-500 h-4" style={{ width: `${pct}%` }}></div>
-                        </div>
-                        <div className="w-16 text-right">{count} ({pct}%)</div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            ) : (
-              <div className="text-center py-8">
-                <p className="text-gray-600">No ratings submitted yet.</p>
-              </div>
-            )
-          ) : (
-            <div className="text-center py-8">
-              <p className="text-gray-600">No results available for this poll type.</p>
-            </div>
-          )}
+            ))}
+          </div>
         </div>
       </div>
     </div>

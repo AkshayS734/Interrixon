@@ -139,10 +139,19 @@ export const handleSocketConnection = (io) => {
           success: true,
           poll: {
             sessionId: poll.sessionId,
-            question: poll.question,
-            type: poll.type,
-            options: poll.options,
-            results: userType === 'admin' ? poll.results : poll.results.map(r => ({ option: r.option, votes: r.votes })),
+            systemId: poll._id.toString(),
+            questions: (poll.questions || []).map(q => ({
+              _id: q._id,
+              question: q.question,
+              type: q.type,
+              options: q.options,
+              results: userType === 'admin' ? q.results : q.results.map(r => {
+                if (r.option !== undefined) {
+                  return { option: r.option, votes: r.votes };
+                }
+                return r; // for rating/open-text
+              })
+            })),
             responses: poll.responses || [],
             expiresAt: poll.expiresAt,
             totalVotes: poll.voters.length,
@@ -170,7 +179,7 @@ export const handleSocketConnection = (io) => {
     // Handle voting
     socket.on('vote', async (data, callback) => {
       try {
-        const { sessionId, vote, userId } = data;
+        const { sessionId, questionId, vote, userId } = data;
         
         if (!voteLimiter.check(socket.id)) {
           return callback({
@@ -210,19 +219,34 @@ export const handleSocketConnection = (io) => {
           });
         }
 
-        // Check if user already voted
-        if (poll.voters.includes(userId)) {
+        // Check if user already voted on THIS specific question
+        const alreadyVotedOnQuestion = poll.responses.some(
+          r => r.userId === userId && r.questionId.toString() === questionId
+        );
+        if (alreadyVotedOnQuestion) {
           return callback({
             success: false,
-            message: 'You have already voted'
+            message: 'You have already voted on this question'
           });
         }
+
+        // Find the question
+        const questionIndex = poll.questions.findIndex(q => q._id.toString() === questionId);
+        if (questionIndex === -1) {
+          return callback({
+            success: false,
+            message: 'Question not found'
+          });
+        }
+
+        const question = poll.questions[questionIndex];
+        const type = question.type;
 
         // Process vote atomically
         let updateQuery = {};
         
-        if (poll.type === 'multiple-choice') {
-          const optionIndex = poll.results.findIndex(r => r.option === vote);
+        if (type === 'multiple-choice' || type === 'yes-no') {
+          const optionIndex = question.results.findIndex(r => r.option === vote);
           if (optionIndex === -1) {
             return callback({
               success: false,
@@ -231,34 +255,44 @@ export const handleSocketConnection = (io) => {
           }
           
           updateQuery = {
-            $inc: { [`results.${optionIndex}.votes`]: 1 },
-            $push: { voters: userId }
+            $inc: { [`questions.${questionIndex}.results.${optionIndex}.votes`]: 1 },
+            $push: { responses: { userId, questionId, response: vote, timestamp: new Date() } }
           };
-        } else if (poll.type === 'yes-no') {
-          const optionIndex = poll.results.findIndex(r => r.option.toLowerCase() === vote.toLowerCase());
-          if (optionIndex === -1) {
+          
+          // Only add to voters if they haven't voted on ANY question yet
+          if (!poll.voters.includes(userId)) {
+            updateQuery.$push.voters = userId;
+          }
+        } else if (type === 'rating') {
+          const rating = parseInt(vote, 10);
+          if (isNaN(rating) || rating < 1 || rating > 5) {
             return callback({
               success: false,
-              message: 'Invalid option'
+              message: 'Rating must be between 1 and 5'
             });
           }
           
-          updateQuery = {
-            $inc: { [`results.${optionIndex}.votes`]: 1 },
-            $push: { voters: userId }
-          };
-        } else {
-          // For open-text and rating
           updateQuery = {
             $push: { 
-              voters: userId,
-              responses: { 
-                userId, 
-                response: vote, 
-                timestamp: new Date() 
-              }
+              responses: { userId, questionId, response: rating, timestamp: new Date() }
             }
           };
+          
+          // Only add to voters if they haven't voted on ANY question yet
+          if (!poll.voters.includes(userId)) {
+            updateQuery.$push.voters = userId;
+          }
+        } else if (type === 'open-text') {
+          updateQuery = {
+            $push: { 
+              responses: { userId, questionId, response: vote, timestamp: new Date() }
+            }
+          };
+          
+          // Only add to voters if they haven't voted on ANY question yet
+          if (!poll.voters.includes(userId)) {
+            updateQuery.$push.voters = userId;
+          }
         }
 
         const updatedPoll = await Poll.findOneAndUpdate(
@@ -269,6 +303,7 @@ export const handleSocketConnection = (io) => {
 
         logger.info('Vote recorded via socket', { 
           sessionId, 
+          questionId,
           userId, 
           socketId: socket.id 
         });
@@ -279,10 +314,12 @@ export const handleSocketConnection = (io) => {
         });
 
         // Broadcast updated results to all users in the poll room
+        const updatedQuestion = updatedPoll.questions.find(q => q._id.toString() === questionId);
         io.to(`poll_${targetSessionId}`).emit('pollUpdate', {
-          results: updatedPoll.results,
-          responses: updatedPoll.responses || [],
-          type: updatedPoll.type,
+          questionId,
+          results: updatedQuestion.results,
+          responses: updatedPoll.responses.filter(r => r.questionId.toString() === questionId),
+          type: updatedQuestion.type,
           totalVotes: updatedPoll.voters.length,
           lastUpdate: new Date()
         });
@@ -347,9 +384,14 @@ export const handleSocketConnection = (io) => {
         // Notify all participants
         io.to(`poll_${poll.sessionId}`).emit('pollClosed', {
           message: 'This poll has been closed by the administrator',
-          finalResults: poll.results,
+          finalQuestions: poll.questions.map(q => ({
+            _id: q._id,
+            question: q.question,
+            type: q.type,
+            options: q.options,
+            results: q.results
+          })),
           finalResponses: poll.responses || [],
-          type: poll.type,
           closedAt: new Date()
         });
 

@@ -24,16 +24,16 @@ function buildPollQuery(id) {
 
 export const createPoll = async (req, res) => {
   try {
-    const { question, type, options, duration } = req.body;
+    const { pollName, questions, duration } = req.body;
     logger.info('Create poll request received', { body: req.body, adminId: req.admin?._id });
     const createdBy = req.admin._id;
 
-    const poll = await serviceCreatePoll({ question, type, options, duration, createdBy });
+    const poll = await serviceCreatePoll({ questions, duration, createdBy, pollName });
 
     logger.info('Poll created', {
       sessionId: poll.sessionId,
       adminId: createdBy,
-      type,
+      questionsCount: poll.questions.length,
       duration
     });
 
@@ -42,9 +42,12 @@ export const createPoll = async (req, res) => {
       poll: {
         sessionId: poll.sessionId,
         systemId: poll._id.toString(),
-        question: poll.question,
-        type: poll.type,
-        options: poll.options,
+        questions: poll.questions.map(q => ({
+          _id: q._id,
+          question: q.question,
+          type: q.type,
+          options: q.options
+        })),
         expiresAt: poll.expiresAt
       }
     });
@@ -59,22 +62,30 @@ export const createPoll = async (req, res) => {
 
 export const vote = async (req, res) => {
   try {
-    const { sessionId, vote: voteValue, userId } = req.body;
+    const { sessionId, questionId, vote: voteValue, userId } = req.body;
     if (!isValidIdentifier(sessionId)) {
       return res.status(400).json({ success: false, message: 'Invalid session ID' });
     }
 
-    const updatedPoll = await serviceSubmitVote({ sessionId, option: voteValue, userId });
+    const updatedPoll = await serviceSubmitVote({ sessionId, questionId, option: voteValue, userId });
 
     logger.info('Vote recorded', {
       sessionId,
+      questionId,
       userId,
-      vote: updatedPoll.type === 'multiple-choice' || updatedPoll.type === 'yes-no' ? voteValue : '[response]'
+      vote: voteValue
     });
 
-    res.json({ success: true, message: 'Vote recorded successfully', results: updatedPoll.results });
+    // Return the specific question's results
+    const question = updatedPoll.questions.find(q => q._id.toString() === questionId);
+    res.json({
+      success: true,
+      message: 'Vote recorded successfully',
+      results: question ? question.results : [],
+      responses: updatedPoll.responses.filter(r => r.questionId.toString() === questionId)
+    });
   } catch (error) {
-    logger.error('Vote error', { error: error.message, sessionId: req.body.sessionId });
+    logger.error('Vote error', { error: error.message, sessionId: req.body.sessionId, questionId: req.body.questionId });
     res.status(500).json({ success: false, message: error.message || 'Failed to record vote' });
   }
 };
@@ -105,9 +116,13 @@ export const getPoll = async (req, res) => {
       success: true,
       poll: {
         sessionId: poll.sessionId,
-        question: poll.question,
-        type: poll.type,
-        options: poll.options,
+        systemId: poll._id.toString(),
+        questions: poll.questions.map(q => ({
+          _id: q._id,
+          question: q.question,
+          type: q.type,
+          options: q.options
+        })),
         expiresAt: poll.expiresAt,
         totalVotes: poll.voters.length,
         isActive: poll.isActive
@@ -221,7 +236,7 @@ export const getAdminPolls = async (req, res) => {
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit)
-      .select('sessionId question type voters expiresAt isActive createdAt');
+      .select('sessionId pollName questions voters expiresAt isActive createdAt');
 
     const totalPolls = await Poll.countDocuments({ createdBy: adminId });
 
@@ -236,8 +251,8 @@ export const getAdminPolls = async (req, res) => {
       success: true,
       polls: polls.map(poll => ({
         sessionId: poll.sessionId,
-        question: poll.question,
-        type: poll.type,
+        pollName: poll.pollName,
+        questions: poll.questions,
         totalVotes: poll.voters.length,
         isActive: poll.isActive && poll.expiresAt > new Date(),
         expiresAt: poll.expiresAt,

@@ -5,19 +5,15 @@ import io from 'socket.io-client';
 
 const AdminPanel = () => {
   const navigate = useNavigate();
-  const [poll, setPoll] = useState({
-    question: '',
-    type: 'multiple-choice',
-    options: ['', '']
-  });
+  const [pollName, setPollName] = useState('');
+  const [questions, setQuestions] = useState([
+    { question: '', type: 'multiple-choice', options: ['', ''] }
+  ]);
   const [duration, setDuration] = useState(300);
-  const [results, setResults] = useState([]);
   const [error, setError] = useState('');
   const [socket, setSocket] = useState(null);
   const [isCreating, setIsCreating] = useState(false);
   const [activePoll, setActivePoll] = useState(null);
-
-  // (session IDs are generated server-side when creating a poll)
 
   useEffect(() => {
     // Check if admin is logged in
@@ -36,10 +32,6 @@ const AdminPanel = () => {
       console.log('Connected to server');
     });
 
-    newSocket.on('pollUpdate', (data) => {
-      setResults(data.results || []);
-    });
-
     newSocket.on('connect_error', (error) => {
       console.error('Socket connection error:', error);
       setError('Failed to connect to server');
@@ -54,39 +46,46 @@ const AdminPanel = () => {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!poll.question.trim()) {
-      setError('Poll question cannot be empty.');
-      return;
-    }
-    const type = poll.type;
-    let cleanedOptions = [];
-
-    if (type === 'multiple-choice') {
-      cleanedOptions = poll.options.map(opt => opt.trim()).filter(opt => opt);
-      if (cleanedOptions.length < 2) {
-        setError('At least two non-empty options are required for multiple-choice polls.');
+    
+    // Validate questions
+    const processedQuestions = [];
+    for (let i = 0; i < questions.length; i++) {
+      const q = questions[i];
+      if (!q.question.trim()) {
+        setError(`Question ${i + 1} cannot be empty.`);
         return;
       }
-    } else if (type === 'yes-no') {
-      cleanedOptions = ['Yes', 'No'];
-    } else if (type === 'rating') {
-      // rating polls don't need options, responses are numeric
-      cleanedOptions = [];
-    } else if (type === 'open-text') {
-      cleanedOptions = [];
+
+      const type = q.type;
+      let cleanedOptions = [];
+
+      if (type === 'multiple-choice') {
+        cleanedOptions = q.options.map(opt => opt.trim()).filter(opt => opt);
+        if (cleanedOptions.length < 2) {
+          setError(`Question ${i + 1}: At least two non-empty options are required for multiple-choice polls.`);
+          return;
+        }
+      } else if (type === 'yes-no') {
+        cleanedOptions = ['Yes', 'No'];
+      } else if (type === 'rating' || type === 'open-text') {
+        cleanedOptions = [];
+      }
+
+      processedQuestions.push({
+        question: q.question.trim(),
+        type,
+        options: cleanedOptions
+      });
     }
 
     setIsCreating(true);
     setError('');
     
     try {
-      // Debug: show payload about to be sent
-      console.debug('Creating poll payload', { type: poll.type, options: cleanedOptions, question: poll.question.trim(), duration });
       const token = localStorage.getItem('adminToken');
       const response = await axios.post(`${import.meta.env?.VITE_API_URL || 'http://localhost:3000'}/api/polls/create`, {
-        question: poll.question.trim(),
-        type: poll.type,
-        options: cleanedOptions,
+        pollName: pollName.trim() || 'Untitled Poll',
+        questions: processedQuestions,
         duration
       }, {
         headers: {
@@ -98,7 +97,6 @@ const AdminPanel = () => {
       if (response.data.success) {
         const pollData = response.data.poll;
         setActivePoll(pollData);
-        setResults(cleanedOptions.map(opt => ({ option: opt, votes: 0 })));
         setError(null);
         
         // Join the poll room via socket
@@ -121,21 +119,53 @@ const AdminPanel = () => {
     }
   };
 
-  const addOption = () => {
-    setPoll({ ...poll, options: [...poll.options, ''] });
+  const addQuestion = () => {
+    setQuestions([...questions, { question: '', type: 'multiple-choice', options: ['', ''] }]);
   };
 
-  const removeOption = (index) => {
-    if (poll.options.length > 2) {
-      const newOptions = poll.options.filter((_, i) => i !== index);
-      setPoll({ ...poll, options: newOptions });
+  const removeQuestion = (index) => {
+    if (questions.length > 1) {
+      const newQuestions = questions.filter((_, i) => i !== index);
+      setQuestions(newQuestions);
     }
   };
 
-  const updateOption = (index, value) => {
-    const newOptions = [...poll.options];
-    newOptions[index] = value;
-    setPoll({ ...poll, options: newOptions });
+  const updateQuestion = (index, field, value) => {
+    const newQuestions = [...questions];
+    newQuestions[index] = { ...newQuestions[index], [field]: value };
+    
+    // Reset options when type changes
+    if (field === 'type') {
+      if (value === 'yes-no') {
+        newQuestions[index].options = ['Yes', 'No'];
+      } else if (value === 'rating' || value === 'open-text') {
+        newQuestions[index].options = [];
+      } else if (value === 'multiple-choice' && (!newQuestions[index].options || newQuestions[index].options.length < 2)) {
+        newQuestions[index].options = ['', ''];
+      }
+    }
+    
+    setQuestions(newQuestions);
+  };
+
+  const addOption = (questionIndex) => {
+    const newQuestions = [...questions];
+    newQuestions[questionIndex].options = [...newQuestions[questionIndex].options, ''];
+    setQuestions(newQuestions);
+  };
+
+  const removeOption = (questionIndex, optionIndex) => {
+    const newQuestions = [...questions];
+    if (newQuestions[questionIndex].options.length > 2) {
+      newQuestions[questionIndex].options = newQuestions[questionIndex].options.filter((_, i) => i !== optionIndex);
+    }
+    setQuestions(newQuestions);
+  };
+
+  const updateOption = (questionIndex, optionIndex, value) => {
+    const newQuestions = [...questions];
+    newQuestions[questionIndex].options[optionIndex] = value;
+    setQuestions(newQuestions);
   };
 
   const handleLogout = () => {
@@ -173,83 +203,123 @@ const AdminPanel = () => {
 
           {!activePoll ? (
             <form onSubmit={handleSubmit} className="space-y-6">
+              {/* Poll Name Section */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Poll Question
+                  Poll Name (Optional)
                 </label>
                 <input
                   type="text"
-                  value={poll.question}
-                  onChange={(e) => setPoll({ ...poll, question: e.target.value })}
-                  placeholder="Enter your poll question"
+                  value={pollName}
+                  onChange={(e) => setPollName(e.target.value)}
+                  placeholder="Enter poll name (e.g., Product Feedback Survey)"
                   disabled={isCreating}
                   className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-100"
+                  maxLength="200"
                 />
               </div>
 
+              {/* Questions Section */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Question Type
-                </label>
-                <select
-                  value={poll.type}
-                  onChange={(e) => {
-                    const newType = e.target.value;
-                    if (newType === 'multiple-choice' && (!poll.options || poll.options.length < 2)) {
-                      setPoll({ ...poll, type: newType, options: ['', ''] });
-                    } else if (newType === 'yes-no') {
-                      setPoll({ ...poll, type: newType, options: ['Yes', 'No'] });
-                    } else {
-                      setPoll({ ...poll, type: newType });
-                    }
-                  }}
-                  disabled={isCreating}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-100"
-                >
-                  <option value="multiple-choice">Multiple Choice</option>
-                  <option value="yes-no">Yes / No</option>
-                  <option value="open-text">Open Text</option>
-                  <option value="rating">Rating (1-5)</option>
-                </select>
-              </div>
+                <h2 className="text-lg font-bold text-gray-800 mb-4">Poll Questions</h2>
+                <div className="space-y-8">
+                  {questions.map((q, qIndex) => (
+                    <div key={qIndex} className="border border-gray-300 rounded p-4 bg-gray-50">
+                      <div className="flex justify-between items-start mb-4">
+                        <h3 className="text-md font-semibold text-gray-700">Question {qIndex + 1}</h3>
+                        {questions.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => removeQuestion(qIndex)}
+                            disabled={isCreating}
+                            className="px-3 py-1 bg-red-500 text-white rounded hover:bg-red-600 disabled:bg-gray-400 text-sm"
+                          >
+                            Remove
+                          </button>
+                        )}
+                      </div>
 
-              {poll.type === 'multiple-choice' && (
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Options
-                  </label>
-                  {poll.options.map((option, index) => (
-                    <div key={index} className="flex items-center mb-2">
-                      <input
-                        type="text"
-                        value={option}
-                        onChange={(e) => updateOption(index, e.target.value)}
-                        placeholder={`Option ${index + 1}`}
-                        disabled={isCreating}
-                        className="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-100"
-                      />
-                      {poll.options.length > 2 && (
-                        <button
-                          type="button"
-                          onClick={() => removeOption(index)}
+                      <div className="mb-4">
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                          Question Text
+                        </label>
+                        <input
+                          type="text"
+                          value={q.question}
+                          onChange={(e) => updateQuestion(qIndex, 'question', e.target.value)}
+                          placeholder="Enter your question"
                           disabled={isCreating}
-                          className="ml-2 px-3 py-2 bg-red-500 text-white rounded hover:bg-red-600 disabled:bg-gray-400"
+                          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-100"
+                        />
+                      </div>
+
+                      <div className="mb-4">
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                          Question Type
+                        </label>
+                        <select
+                          value={q.type}
+                          onChange={(e) => updateQuestion(qIndex, 'type', e.target.value)}
+                          disabled={isCreating}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-100"
                         >
-                          Remove
-                        </button>
+                          <option value="multiple-choice">Multiple Choice</option>
+                          <option value="yes-no">Yes / No</option>
+                          <option value="open-text">Open Text</option>
+                          <option value="rating">Rating (1-5)</option>
+                        </select>
+                      </div>
+
+                      {q.type === 'multiple-choice' && (
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-2">
+                            Options
+                          </label>
+                          {q.options.map((option, oIndex) => (
+                            <div key={oIndex} className="flex items-center mb-2">
+                              <input
+                                type="text"
+                                value={option}
+                                onChange={(e) => updateOption(qIndex, oIndex, e.target.value)}
+                                placeholder={`Option ${oIndex + 1}`}
+                                disabled={isCreating}
+                                className="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-100"
+                              />
+                              {q.options.length > 2 && (
+                                <button
+                                  type="button"
+                                  onClick={() => removeOption(qIndex, oIndex)}
+                                  disabled={isCreating}
+                                  className="ml-2 px-3 py-2 bg-red-500 text-white rounded hover:bg-red-600 disabled:bg-gray-400 text-sm"
+                                >
+                                  Remove
+                                </button>
+                              )}
+                            </div>
+                          ))}
+                          <button
+                            type="button"
+                            onClick={() => addOption(qIndex)}
+                            disabled={isCreating}
+                            className="mt-2 px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600 disabled:bg-gray-400 text-sm"
+                          >
+                            Add Option
+                          </button>
+                        </div>
                       )}
                     </div>
                   ))}
-                  <button
-                    type="button"
-                    onClick={addOption}
-                    disabled={isCreating}
-                    className="mt-2 px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600 disabled:bg-gray-400"
-                  >
-                    Add Option
-                  </button>
                 </div>
-              )}
+
+                <button
+                  type="button"
+                  onClick={addQuestion}
+                  disabled={isCreating}
+                  className="mt-4 px-4 py-2 bg-purple-500 text-white rounded hover:bg-purple-600 disabled:bg-gray-400"
+                >
+                  Add Question
+                </button>
+              </div>
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -282,16 +352,25 @@ const AdminPanel = () => {
                 <p>Share this ID with participants to join the poll.</p>
               </div>
 
-              <div className="mb-6">
-                <h3 className="text-xl font-bold mb-4">{activePoll.question}</h3>
-                <div className="space-y-2">
-                  {results.map((result, index) => (
-                    <div key={index} className="flex items-center justify-between p-3 bg-gray-50 rounded">
-                      <span>{result.option}</span>
-                      <span className="font-bold text-blue-600">{result.votes} votes</span>
-                    </div>
-                  ))}
-                </div>
+              <div className="mb-6 space-y-4">
+                {activePoll.questions.map((q, index) => (
+                  <div key={q._id} className="border border-gray-300 rounded p-4 bg-gray-50">
+                    <h3 className="text-lg font-bold mb-2">Question {index + 1}: {q.question}</h3>
+                    <p className="text-sm text-gray-600 mb-3">Type: {q.type}</p>
+                    {q.type === 'multiple-choice' || q.type === 'yes-no' ? (
+                      <div className="space-y-2">
+                        {q.options.map((opt, oIndex) => (
+                          <div key={oIndex} className="flex items-center justify-between p-2 bg-white rounded border border-gray-200">
+                            <span>{opt}</span>
+                            <span className="font-bold text-blue-600">0 votes</span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-sm text-gray-500">{q.type === 'rating' ? 'Rating 1-5' : 'Open text responses'}</p>
+                    )}
+                  </div>
+                ))}
               </div>
 
               <div className="flex space-x-4">
@@ -304,8 +383,7 @@ const AdminPanel = () => {
                 <button
                   onClick={() => {
                     setActivePoll(null);
-                    setResults([]);
-                    setPoll({ question: '', type: 'multiple-choice', options: ['', ''] });
+                    setQuestions([{ question: '', type: 'multiple-choice', options: ['', ''] }]);
                   }}
                   className="bg-gray-500 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded transition-colors"
                 >

@@ -81,19 +81,18 @@ const PreviousPolls = () => {
                 <div key={p.sessionId + (p.createdAt || '')} className="p-4 border rounded hover:shadow cursor-pointer" onClick={() => navigate(`/results/${p.sessionId}`)}>
                   <div className="flex justify-between items-center">
                     <div>
-                      <div className="text-lg font-semibold">{p.question}</div>
-                      <div className="text-sm text-gray-500">Session: <span className="font-mono">{p.sessionId}</span></div>
-                    </div>
-                    <div className="text-right">
-                      <div className="text-sm text-gray-600">Votes: <span className="font-bold">{p.totalVotes}</span></div>
-                      <div className="text-sm text-gray-600">{p.isActive ? 'Active' : 'Closed'}</div>
-                      <div className="text-sm text-gray-400">{p.expiresAt ? new Date(p.expiresAt).toLocaleString() : ''}</div>
+                      <div className="text-lg font-semibold">{p.pollName || 'Untitled Poll'}</div>
+                      <div className="text-sm text-gray-600">{p.questions && p.questions.length > 0 ? `${p.questions.length} question(s)` : 'No questions'}</div>
+                        <div className="text-sm text-gray-500">Session: <span className="font-mono">{p.sessionId}</span></div>
+                      </div>
+                      <div className="text-right">
+                        <div className="text-sm text-gray-600">Votes: <span className="font-bold">{p.totalVotes}</span></div>
+                        <div className="text-sm text-gray-600">{p.isActive ? 'Active' : 'Closed'}</div>
+                        <div className="text-sm text-gray-400">{p.expiresAt ? new Date(p.expiresAt).toLocaleString() : ''}</div>
                     </div>
                   </div>
                 </div>
-              ))}
-
-              <div className="flex justify-between items-center mt-4">
+              ))}              <div className="flex justify-between items-center mt-4">
                 <button
                   onClick={() => setPage((prev) => Math.max(1, prev - 1))}
                   disabled={page <= 1}

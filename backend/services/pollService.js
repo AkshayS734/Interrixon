@@ -36,11 +36,23 @@ function buildPollQuery(id) {
   return { sessionId: id };
 }
 
-export async function createPoll({ sessionId, question, type, options, duration, createdBy }) {
+export async function createPoll({ sessionId, questions, duration, createdBy, pollName }) {
   // If sessionId provided, validate it. Otherwise generate a unique 6-char sessionId.
   const originalSessionIdProvided = Boolean(sessionId);
   if (sessionId && !isValidIdentifier(sessionId)) throw new Error('Invalid session ID format.');
-  if (!question || !type) throw new Error('Question and poll type are required.');
+  if (!questions || !Array.isArray(questions) || questions.length === 0) {
+    throw new Error('At least one question is required.');
+  }
+  
+  // Validate each question
+  questions.forEach((q, idx) => {
+    if (!q.question || !q.type) {
+      throw new Error(`Question ${idx + 1}: question text and type are required.`);
+    }
+    if (!['multiple-choice', 'yes-no', 'open-text', 'rating'].includes(q.type)) {
+      throw new Error(`Question ${idx + 1}: Invalid poll type.`);
+    }
+  });
 
   // Generate a unique 6-character sessionId when not supplied
   if (!sessionId) {
@@ -61,43 +73,49 @@ export async function createPoll({ sessionId, question, type, options, duration,
     if (!isUnique) throw new Error('Unable to generate a unique session ID.');
   }
 
-  question = sanitizeText(question.trim());
+  // Process and validate each question
+  const processedQuestions = questions.map((q) => {
+    const sanitizedQuestion = sanitizeText(q.question.trim());
+    const type = q.type;
+    let options = q.options || [];
 
-  if (!['multiple-choice', 'yes-no', 'open-text', 'rating'].includes(type)) {
-    throw new Error('Invalid poll type.');
-  }
+    if (type === 'multiple-choice') {
+      options = cleanOptions(options);
+      if (options.length < 2) throw new Error('At least 2 options required for multiple-choice.');
+      if (new Set(options).size !== options.length) throw new Error('Poll options must be unique.');
+    } else if (type === 'yes-no') {
+      options = ['Yes', 'No'];
+    } else if (type === 'rating' || type === 'open-text') {
+      options = [];
+    }
 
-  // Handle options per poll type
-  if (type === 'multiple-choice') {
-    options = cleanOptions(options);
-    if (options.length < 2) throw new Error('At least 2 options required.');
-    if (new Set(options).size !== options.length) throw new Error('Poll options must be unique.');
-  } else if (type === 'yes-no') {
-    // enforce Yes/No options server-side
-    options = ['Yes', 'No'];
-  } else if (type === 'rating') {
-    // rating polls don't require explicit options; responses are numeric
-    options = [];
-  } else if (type === 'open-text') {
-    options = [];
-  }
+    return {
+      question: sanitizedQuestion,
+      type,
+      options,
+      results: type === 'open-text' || type === 'rating' ? [] : options.map(option => ({ option, votes: 0 }))
+    };
+  });
 
   if (!duration || typeof duration !== 'number' || duration < 1) {
     throw new Error('Poll duration must be a positive number.');
   }
 
+  // Ensure no existing poll uses the same sessionId
+  const existing = await Poll.findOne({ sessionId }).select('_id').lean();
+  if (existing) throw new Error('SessionId already in use.');
+
   const pollData = {
     sessionId,
-    question,
-    type,
-    options: type === 'open-text' ? [] : options,
-    results: type === 'open-text' ? [] : options.map(option => ({ option, votes: 0 })),
+    pollName: pollName || 'Untitled Poll',
+    questions: processedQuestions,
     responses: [],
     expiresAt: new Date(Date.now() + duration * 1000),
     voters: []
   };
 
   pollData.createdBy = createdBy;
+  
   // Try saving; if a duplicate key for sessionId occurs (race condition),
   // retry with a new generated sessionId when the id was not provided by the caller.
   const maxSaveAttempts = 10;
@@ -131,30 +149,65 @@ export async function createPoll({ sessionId, question, type, options, duration,
   throw new Error('Unable to create poll after several attempts due to sessionId conflicts.');
 }
 
-export async function submitVote({ sessionId, option, userId }) {
+export async function submitVote({ sessionId, questionId, option, userId }) {
   if (!isValidIdentifier(sessionId)) throw new Error('Invalid session ID format.');
-  if (!sessionId || !userId) throw new Error('Session ID and user ID are required.');
+  if (!sessionId || !questionId || !userId) throw new Error('Session ID, question ID, and user ID are required.');
 
   const poll = await Poll.findOne(buildPollQuery(sessionId));
   if (!poll) throw new Error('Poll not found.');
   if (poll.expiresAt && new Date() > poll.expiresAt) throw new Error('Poll has expired.');
-  if (poll.voters.includes(userId)) throw new Error('You have already voted.');
 
-  if (poll.type === 'open-text') {
+  // Find the question
+  const question = poll.questions.find(q => q._id.toString() === questionId);
+  if (!question) throw new Error('Question not found.');
+
+  // Check if user has already voted on THIS specific question
+  const alreadyVotedOnThisQuestion = poll.responses.some(
+    r => r.userId === userId && r.questionId.toString() === questionId
+  );
+  if (alreadyVotedOnThisQuestion) throw new Error('You have already voted on this question.');
+
+  const type = question.type;
+
+  if (type === 'open-text') {
     if (!option || option.trim().length === 0) throw new Error('Response text is required.');
     poll.responses.push({
       userId,
+      questionId,
       response: sanitizeText(option.trim()),
       timestamp: new Date()
     });
+  } else if (type === 'rating') {
+    const rating = parseInt(option, 10);
+    if (isNaN(rating) || rating < 1 || rating > 5) throw new Error('Rating must be between 1 and 5.');
+    poll.responses.push({
+      userId,
+      questionId,
+      response: rating,
+      timestamp: new Date()
+    });
+    // Update results (array of response objects for aggregation)
+    question.results.push({ response: rating });
   } else {
+    // multiple-choice or yes-no
     option = sanitizeText(option.trim());
-    const result = poll.results.find(r => r.option === option);
+    const result = question.results.find(r => r.option === option);
     if (!result) throw new Error('Option not found.');
     result.votes += 1;
+    poll.responses.push({
+      userId,
+      questionId,
+      response: option,
+      timestamp: new Date()
+    });
   }
 
-  poll.voters.push(userId);
+  // Track that user has voted on at least one question
+  // Only add to voters if they haven't voted on ANY question yet
+  if (!poll.voters.includes(userId)) {
+    poll.voters.push(userId);
+  }
+
   await poll.save();
   return poll;
 }

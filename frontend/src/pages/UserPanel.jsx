@@ -9,7 +9,7 @@ const UserPanel = () => {
   
   const [socket, setSocket] = useState(null);
   const [poll, setPoll] = useState(null);
-  const [selectedOption, setSelectedOption] = useState('');
+  const [responses, setResponses] = useState({}); // { questionId: selectedAnswer }
   const [userId] = useState(() => 
     localStorage.getItem('userId') || 
     'user_' + Math.random().toString(36).substr(2, 9)
@@ -19,6 +19,7 @@ const UserPanel = () => {
   const [error, setError] = useState(null);
   const [voting, setVoting] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState('connecting');
+  const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
 
   // Store userId in localStorage
   useEffect(() => {
@@ -48,7 +49,12 @@ const UserPanel = () => {
         setLoading(false);
         if (response.success) {
           setPoll(response.poll);
-          setHasVoted(response.poll.voters && response.poll.voters.includes(userId));
+          // Initialize responses object for each question
+          const initialResponses = {};
+          response.poll.questions.forEach(q => {
+            initialResponses[q._id] = '';
+          });
+          setResponses(initialResponses);
         } else {
           setError(response.message || 'Failed to join poll');
         }
@@ -69,13 +75,25 @@ const UserPanel = () => {
     });
 
     // Poll event handlers
-    newSocket.on('pollUpdate', (data) => {
-      setPoll(prev => prev ? { ...prev, ...data } : null);
+    newSocket.on('pollUpdate', (pollUpdateData) => {
+      // Update poll with new vote results
+      setPoll(prev => {
+        if (!prev) return null;
+        const updated = { ...prev };
+        if (pollUpdateData.questionId) {
+          const qIndex = updated.questions.findIndex(q => q._id === pollUpdateData.questionId);
+          if (qIndex !== -1) {
+            updated.questions[qIndex].results = pollUpdateData.results;
+          }
+        }
+        updated.totalVotes = pollUpdateData.totalVotes;
+        return updated;
+      });
     });
 
-    newSocket.on('pollClosed', (data) => {
+    newSocket.on('pollClosed', () => {
       setError('This poll has been closed by the administrator');
-      setPoll(prev => prev ? { ...prev, isActive: false, ...data } : null);
+      setPoll(prev => prev ? { ...prev, isActive: false } : null);
     });
 
     newSocket.on('participantJoined', () => {
@@ -87,31 +105,43 @@ const UserPanel = () => {
     return () => {
       newSocket.close();
     };
-  }, [sessionId, userId]);
+  }, [sessionId]);
 
   const handleVote = useCallback(async () => {
-    if (!socket || !selectedOption || voting || hasVoted) return;
+    const currentQuestion = poll.questions[currentQuestionIndex];
+    const selectedAnswer = responses[currentQuestion._id];
+
+    if (!socket || !selectedAnswer || voting) return;
 
     setVoting(true);
     setError(null);
 
     socket.emit('vote', {
       sessionId,
-      vote: selectedOption,
+      questionId: currentQuestion._id,
+      vote: selectedAnswer,
       userId
     }, (response) => {
       setVoting(false);
       
       if (response.success) {
-        setHasVoted(true);
-        setSelectedOption('');
-        // Navigate to results page
-        navigate(`/results/${sessionId}`);
+        // Check if this is the last question
+        if (currentQuestionIndex === poll.questions.length - 1) {
+          setHasVoted(true);
+          // Navigate to results after voting on last question
+          setTimeout(() => {
+            navigate(`/results/${sessionId}`);
+          }, 1000);
+        } else {
+          // Move to next question
+          setCurrentQuestionIndex(currentQuestionIndex + 1);
+          setError(null);
+        }
       } else {
         setError(response.message || 'Failed to record vote');
       }
     });
-  }, [socket, selectedOption, voting, hasVoted, sessionId, userId, navigate]);
+  }, [socket, responses, poll, voting, currentQuestionIndex, sessionId, userId, navigate]);
 
   if (loading) {
     return <Loading message="Joining poll..." />;
@@ -139,9 +169,12 @@ const UserPanel = () => {
     );
   }
 
-  if (!poll) {
+  if (!poll || !poll.questions || poll.questions.length === 0) {
     return <Loading message="Loading poll..." />;
   }
+
+  const currentQuestion = poll.questions[currentQuestionIndex];
+  const currentResponse = responses[currentQuestion._id];
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-4">
@@ -168,6 +201,15 @@ const UserPanel = () => {
           <div className="text-center mb-8">
             <h1 className="text-3xl font-bold text-gray-800 mb-2">Poll</h1>
             <p className="text-gray-600">Session: {sessionId}</p>
+            <p className="text-gray-500 mt-2">Question {currentQuestionIndex + 1} of {poll.questions.length}</p>
+          </div>
+
+          {/* Progress bar */}
+          <div className="mb-6 bg-gray-200 rounded-full h-2">
+            <div 
+              className="bg-blue-500 h-2 rounded-full transition-all duration-300"
+              style={{ width: `${((currentQuestionIndex + 1) / poll.questions.length) * 100}%` }}
+            />
           </div>
 
           {error && (
@@ -184,7 +226,7 @@ const UserPanel = () => {
                 </svg>
               </div>
               <h2 className="text-2xl font-bold text-gray-800 mb-2">Thank you for voting!</h2>
-              <p className="text-gray-600 mb-6">Your vote has been recorded.</p>
+              <p className="text-gray-600 mb-6">Your votes have been recorded.</p>
               <button
                 onClick={() => navigate(`/results/${sessionId}`)}
                 className="bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-6 rounded transition-colors"
@@ -195,18 +237,18 @@ const UserPanel = () => {
           ) : (
             <>
               <div className="mb-8">
-                <h2 className="text-xl font-bold text-gray-800 mb-4">{poll.question}</h2>
+                <h2 className="text-xl font-bold text-gray-800 mb-4">{currentQuestion.question}</h2>
                 
-                {poll.type === 'multiple-choice' && (
+                {currentQuestion.type === 'multiple-choice' && (
                   <div className="space-y-3">
-                    {poll.options.map((option, index) => (
+                    {currentQuestion.options.map((option, index) => (
                       <label key={index} className="flex items-center p-3 border rounded cursor-pointer hover:bg-gray-50">
                         <input
                           type="radio"
                           name="option"
                           value={option}
-                          checked={selectedOption === option}
-                          onChange={(e) => setSelectedOption(e.target.value)}
+                          checked={currentResponse === option}
+                          onChange={(e) => setResponses({ ...responses, [currentQuestion._id]: e.target.value })}
                           disabled={voting}
                           className="mr-3"
                         />
@@ -216,15 +258,15 @@ const UserPanel = () => {
                   </div>
                 )}
 
-                {poll.type === 'yes-no' && (
+                {currentQuestion.type === 'yes-no' && (
                   <div className="flex space-x-4">
                     {['Yes', 'No'].map((option) => (
                       <button
                         key={option}
-                        onClick={() => setSelectedOption(option)}
+                        onClick={() => setResponses({ ...responses, [currentQuestion._id]: option })}
                         disabled={voting}
                         className={`flex-1 p-4 rounded font-medium transition-colors ${
-                          selectedOption === option
+                          currentResponse === option
                             ? 'bg-blue-500 text-white'
                             : 'bg-gray-100 hover:bg-gray-200 text-gray-800'
                         }`}
@@ -235,10 +277,10 @@ const UserPanel = () => {
                   </div>
                 )}
 
-                {poll.type === 'open-text' && (
+                {currentQuestion.type === 'open-text' && (
                   <textarea
-                    value={selectedOption}
-                    onChange={(e) => setSelectedOption(e.target.value)}
+                    value={currentResponse}
+                    onChange={(e) => setResponses({ ...responses, [currentQuestion._id]: e.target.value })}
                     disabled={voting}
                     placeholder="Enter your response..."
                     className="w-full p-3 border rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
@@ -246,15 +288,15 @@ const UserPanel = () => {
                   />
                 )}
 
-                {poll.type === 'rating' && (
+                {currentQuestion.type === 'rating' && (
                   <div className="flex justify-center space-x-2">
                     {[1, 2, 3, 4, 5].map((rating) => (
                       <button
                         key={rating}
-                        onClick={() => setSelectedOption(rating.toString())}
+                        onClick={() => setResponses({ ...responses, [currentQuestion._id]: rating.toString() })}
                         disabled={voting}
                         className={`w-12 h-12 rounded-full font-bold transition-colors ${
-                          selectedOption === rating.toString()
+                          currentResponse === rating.toString()
                             ? 'bg-yellow-500 text-white'
                             : 'bg-gray-200 hover:bg-gray-300 text-gray-700'
                         }`}
@@ -266,12 +308,22 @@ const UserPanel = () => {
                 )}
               </div>
 
-              <div className="text-center">
+              <div className="flex justify-between items-center">
+                {/* {currentQuestionIndex > 0 && (
+                  <button
+                    onClick={() => setCurrentQuestionIndex(currentQuestionIndex - 1)}
+                    disabled={voting}
+                    className="px-6 py-3 bg-gray-500 hover:bg-gray-600 text-white rounded-lg font-bold transition-colors disabled:bg-gray-300"
+                  >
+                    Previous
+                  </button>
+                )} */}
+                <div className="flex-1"></div>
                 <button
                   onClick={handleVote}
-                  disabled={!selectedOption || voting}
+                  disabled={!currentResponse || voting}
                   className={`px-8 py-3 rounded-lg font-bold transition-colors ${
-                    !selectedOption || voting
+                    !currentResponse || voting
                       ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
                       : 'bg-blue-500 hover:bg-blue-600 text-white'
                   }`}
@@ -282,10 +334,12 @@ const UserPanel = () => {
                         <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                         <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                       </svg>
-                      Voting...
+                      Submitting...
                     </div>
+                  ) : currentQuestionIndex === poll.questions.length - 1 ? (
+                    'Submit All Votes'
                   ) : (
-                    'Submit Vote'
+                    'Next Question'
                   )}
                 </button>
               </div>
