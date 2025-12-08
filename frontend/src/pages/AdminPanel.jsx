@@ -37,6 +37,22 @@ const AdminPanel = () => {
       setError('Failed to connect to server');
     });
 
+    // Listen for poll updates when admin is viewing a live poll
+    newSocket.on('pollUpdate', (pollUpdateData) => {
+      setActivePoll(prev => {
+        if (!prev) return null;
+        const updated = { ...prev };
+        if (pollUpdateData.questionId && updated.questions) {
+          const qIndex = updated.questions.findIndex(q => q._id === pollUpdateData.questionId);
+          if (qIndex !== -1) {
+            updated.questions[qIndex].results = pollUpdateData.results;
+          }
+        }
+        updated.totalVotes = pollUpdateData.totalVotes;
+        return updated;
+      });
+    });
+
     setSocket(newSocket);
 
     return () => {
@@ -352,6 +368,11 @@ const AdminPanel = () => {
                 <p>Share this ID with participants to join the poll.</p>
               </div>
 
+              <div className="mb-6 p-4 bg-blue-50 rounded">
+                <p className="text-gray-700">Total Votes: <span className="font-bold text-lg">{activePoll.totalVotes || 0}</span></p>
+                <p className="text-gray-600 text-sm mt-1">{activePoll.questions.length} question(s)</p>
+              </div>
+
               <div className="mb-6 space-y-4">
                 {activePoll.questions.map((q, index) => (
                   <div key={q._id} className="border border-gray-300 rounded p-4 bg-gray-50">
@@ -359,12 +380,16 @@ const AdminPanel = () => {
                     <p className="text-sm text-gray-600 mb-3">Type: {q.type}</p>
                     {q.type === 'multiple-choice' || q.type === 'yes-no' ? (
                       <div className="space-y-2">
-                        {q.options.map((opt, oIndex) => (
-                          <div key={oIndex} className="flex items-center justify-between p-2 bg-white rounded border border-gray-200">
-                            <span>{opt}</span>
-                            <span className="font-bold text-blue-600">0 votes</span>
-                          </div>
-                        ))}
+                        {q.options && q.options.map((opt, oIndex) => {
+                          const resultItem = q.results && q.results.find(r => r.option === opt);
+                          const votes = resultItem ? resultItem.votes : 0;
+                          return (
+                            <div key={oIndex} className="flex items-center justify-between p-2 bg-white rounded border border-gray-200">
+                              <span>{opt}</span>
+                              <span className="font-bold text-blue-600">{votes} vote{votes !== 1 ? 's' : ''}</span>
+                            </div>
+                          );
+                        })}
                       </div>
                     ) : (
                       <p className="text-sm text-gray-500">{q.type === 'rating' ? 'Rating 1-5' : 'Open text responses'}</p>

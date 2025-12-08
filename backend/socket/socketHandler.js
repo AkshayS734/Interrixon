@@ -140,6 +140,7 @@ export const handleSocketConnection = (io) => {
           poll: {
             sessionId: poll.sessionId,
             systemId: poll._id.toString(),
+            pollName: poll.pollName,
             questions: (poll.questions || []).map(q => ({
               _id: q._id,
               question: q.question,
